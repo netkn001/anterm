@@ -4127,4 +4127,154 @@ mod dec_mode_2027_tests {
         );
         assert!(!guard.grapheme_clustering());
     }
+
+    #[test]
+    fn selection_survives_agent_line_and_below_clears_during_streaming() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        use alacritty_terminal::term::Config as TermConfig;
+
+        let mut term = Term::new(TermConfig::default(), &TermSize::new(40, 10), VoidListener);
+        let mut proc: ansi::Processor = ansi::Processor::new();
+        let mut guard = term_adapter::KeyboardStackGuard::default();
+
+        term_adapter::advance(
+            &mut proc,
+            &mut term,
+            &mut guard,
+            b"hello world\r\nworking...\r\n",
+        );
+
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(0), Column(10)), Side::Right);
+        term.selection = Some(sel);
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello world"));
+
+        // Typical Ink/agent synchronized redraw: move up, clear line (CSI 2K),
+        // rewrite line, clear below (CSI 0J), print next spinner tick.
+        term_adapter::advance(
+            &mut proc,
+            &mut term,
+            &mut guard,
+            b"\x1b[?2026h\x1b[1;1H\x1b[2Khello world\r\n\x1b[0Jspinner 2\x1b[?2026l",
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("hello world"),
+            "CSI 2K / CSI 0J redraws must not wipe active selection"
+        );
+
+        // Standalone CSI K and CSI 1J also preserve selection.
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[1;12H\x1b[K");
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello world"));
+        term_adapter::advance(
+            &mut proc,
+            &mut term,
+            &mut guard,
+            b"\x1b[2;1H\x1b[1J\x1b[1;1Hhello world",
+        );
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn clear_screen_all_preserves_scrollback_sync_update_and_alt_screen_selections() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        use alacritty_terminal::term::Config as TermConfig;
+
+        let mut term = Term::new(TermConfig::default(), &TermSize::new(30, 4), VoidListener);
+        let mut proc: ansi::Processor = ansi::Processor::new();
+        let mut guard = term_adapter::KeyboardStackGuard::default();
+
+        // Push "hist line" into scrollback (line -1) with 4 viewport lines below.
+        term_adapter::advance(
+            &mut proc,
+            &mut term,
+            &mut guard,
+            b"hist line\r\nv0\r\nv1\r\nv2\r\nv3",
+        );
+        let mut hist_sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-1), Column(0)),
+            Side::Left,
+        );
+        hist_sel.update(Point::new(Line(-1), Column(8)), Side::Right);
+        term.selection = Some(hist_sel);
+        assert_eq!(term.selection_to_string().as_deref(), Some("hist line"));
+
+        // Plain `clear` (CSI 2J) pushes v0..v3 into scrollback and rotates the
+        // scrollback selection up so it stays anchored to "hist line".
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[2J\x1b[Hfresh");
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("hist line"),
+            "scrollback selection must survive CSI 2J and follow rotated history"
+        );
+
+        // Explicit CSI 3J (ClearMode::Saved) still clears history selection.
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[3J");
+        assert!(
+            term.selection.is_none(),
+            "CSI 3J clears scrollback history and must drop history selection"
+        );
+
+        // Plain `clear` (outside ?2026) clears a viewport selection as usual.
+        let mut vp_sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        vp_sel.update(Point::new(Line(0), Column(4)), Side::Right);
+        term.selection = Some(vp_sel);
+        assert_eq!(term.selection_to_string().as_deref(), Some("fresh"));
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[2J\x1b[H");
+        assert!(
+            term.selection.is_none(),
+            "plain CSI 2J outside sync update should still clear viewport selection"
+        );
+
+        // Synchronized full redraw (?2026h ... CSI 2J ... ?2026l) preserves
+        // viewport selection.
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"agent output");
+        let mut sync_sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sync_sel.update(Point::new(Line(0), Column(11)), Side::Right);
+        term.selection = Some(sync_sel);
+        term_adapter::advance(
+            &mut proc,
+            &mut term,
+            &mut guard,
+            b"\x1b[?2026h\x1b[2J\x1b[Hagent output\x1b[?2026l",
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("agent output"),
+            "CSI 2J inside ?2026 synchronized update must preserve viewport selection"
+        );
+
+        // Alternate screen full redraw (CSI 2J) preserves selection even without ?2026.
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[?1049htui line");
+        let mut alt_sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        alt_sel.update(Point::new(Line(0), Column(7)), Side::Right);
+        term.selection = Some(alt_sel);
+        term_adapter::advance(&mut proc, &mut term, &mut guard, b"\x1b[2J\x1b[Htui line");
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("tui line"),
+            "CSI 2J on alt-screen must preserve selection across TUI repaints"
+        );
+    }
 }

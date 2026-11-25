@@ -38,13 +38,14 @@ const MAX_SAFE_KEYBOARD_DEPTH: usize = 4095;
 const DEC_MODE_GRAPHEME_CLUSTERING: u16 = 2027;
 
 /// Per-pane parser adapter state: kitty keyboard mode stack depths on both
-/// screens (`[0]` primary, `[1]` alternate) and DEC Mode 2027 grapheme
-/// clustering state.
+/// screens (`[0]` primary, `[1]` alternate), DEC Mode 2027 grapheme
+/// clustering state, and active DEC Mode 2026 synchronized-update state.
 #[derive(Default)]
 pub(super) struct KeyboardStackGuard {
     depths: [usize; 2],
     grapheme_cluster: bool,
     zwj_pending: bool,
+    in_sync_update: bool,
 }
 
 impl KeyboardStackGuard {
@@ -57,6 +58,7 @@ impl KeyboardStackGuard {
         self.depths = [0, 0];
         self.grapheme_cluster = false;
         self.zwj_pending = false;
+        self.in_sync_update = false;
     }
 
     pub(super) fn reset_keyboard_only(&mut self) {
@@ -259,6 +261,22 @@ fn widen_keycap_cluster<T: EventListener>(term: &mut Term<T>) {
     if matches!(term.grid()[line][column].c, '0'..='9' | '#' | '*') {
         widen_cell_if_narrow(term, line, column);
     }
+}
+
+/// Returns the exact number of lines `alacritty_terminal::Grid::clear_viewport`
+/// will scroll up into scrollback history on the primary screen.
+fn viewport_clear_scroll_lines<T>(term: &Term<T>) -> usize {
+    use alacritty_terminal::grid::{Dimensions as _, GridCell as _};
+    let grid = term.grid();
+    let lines = grid.screen_lines();
+    let cols = grid.columns();
+    for row in (0..lines).rev() {
+        let line = &grid[Line(row as i32)];
+        if (0..cols).any(|c| !line[Column(c)].is_empty()) {
+            return row + 1;
+        }
+    }
+    0
 }
 
 impl<T: EventListener> Handler for TermAdapter<'_, T> {
@@ -499,13 +517,56 @@ impl<T: EventListener> Handler for TermAdapter<'_, T> {
     fn clear_line(&mut self, mode: LineClearMode) {
         self.guard.zwj_pending = false;
         self.mutated = true;
+        // Preserve active text selection across in-place line redraws (e.g.
+        // coding agent spinners and Ink/TUI frames using CSI K / CSI 2K).
+        let selection = self.term.selection.take();
         self.term.clear_line(mode);
+        self.term.selection = selection;
     }
 
     fn clear_screen(&mut self, mode: ClearMode) {
+        use alacritty_terminal::grid::Dimensions as _;
         self.guard.zwj_pending = false;
         self.mutated = true;
-        self.term.clear_screen(mode);
+        match mode {
+            ClearMode::Below | ClearMode::Above => {
+                // Partial viewport clears (CSI 0J / CSI 1J) never scroll the
+                // grid; preserve selection across live TUI/agent redraws.
+                let selection = self.term.selection.take();
+                self.term.clear_screen(mode);
+                self.term.selection = selection;
+            }
+            ClearMode::All => {
+                let selection = self.term.selection.take();
+                if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                    self.term.clear_screen(mode);
+                    self.term.selection = selection;
+                } else {
+                    let positions = viewport_clear_scroll_lines(self.term);
+                    self.term.clear_screen(mode);
+                    if let Some(sel) = selection {
+                        if !sel.intersects_range(Line(0)..) {
+                            // Selection sits entirely in scrollback history:
+                            // rotate it by the rows `clear_viewport` pushed
+                            // into history so it stays anchored to the same text.
+                            let range = Line(0)..Line(self.term.screen_lines() as i32);
+                            let rotated = sel.rotate(self.term, &range, positions as i32);
+                            self.term.selection =
+                                rotated.filter(|s| s.intersects_range(self.term.topmost_line()..));
+                        } else if self.guard.in_sync_update {
+                            // Synchronized full-frame redraw (?2026h ... CSI 2J
+                            // ... ?2026l): keep viewport selection in place.
+                            self.term.selection = Some(sel);
+                        }
+                    }
+                }
+            }
+            ClearMode::Saved => {
+                // Explicit scrollback wipe (CSI 3J): drop selections in the
+                // cleared history while keeping viewport selections intact.
+                self.term.clear_screen(mode);
+            }
+        }
     }
 
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
@@ -552,7 +613,9 @@ impl<T: EventListener> Handler for TermAdapter<'_, T> {
             self.guard.zwj_pending = false;
             return;
         }
-        if !matches!(mode, PrivateMode::Named(NamedPrivateMode::SyncUpdate)) {
+        if matches!(mode, PrivateMode::Named(NamedPrivateMode::SyncUpdate)) {
+            self.guard.in_sync_update = true;
+        } else {
             self.mutated = true;
         }
         self.term.set_private_mode(mode);
@@ -564,7 +627,9 @@ impl<T: EventListener> Handler for TermAdapter<'_, T> {
             self.guard.zwj_pending = false;
             return;
         }
-        if !matches!(mode, PrivateMode::Named(NamedPrivateMode::SyncUpdate)) {
+        if matches!(mode, PrivateMode::Named(NamedPrivateMode::SyncUpdate)) {
+            self.guard.in_sync_update = false;
+        } else {
             self.mutated = true;
         }
         self.term.unset_private_mode(mode);

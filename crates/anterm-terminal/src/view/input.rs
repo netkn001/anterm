@@ -1689,6 +1689,7 @@ impl TerminalView {
             selection.update(r.end, Side::Right);
         }
         term.selection = Some(selection);
+        self.terminal.publish_term_state(&term);
         drop(term);
         self.pointer.selecting = true;
         cx.notify();
