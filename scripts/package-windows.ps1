@@ -41,11 +41,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RootDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
     $OutDir = Join-Path $RootDir "dist"
 } elseif (-not [System.IO.Path]::IsPathRooted($OutDir)) {
     $OutDir = Join-Path $RootDir $OutDir
+}
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
+
+function Write-StepMessage {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Message = "")
+
+    Write-Information -MessageData $Message -InformationAction Continue
 }
 
 # Read shared workspace version from root Cargo.toml.
@@ -61,6 +69,8 @@ $Version = $VersionMatch.Matches[0].Groups[1].Value
 # - standalone server:    `anterm-server-windows-<x86_64|aarch64>.exe`
 # - bundled ConPTY dir:   `assets/windows/conpty/<x64|arm64>`
 function Resolve-ArchInfo {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
     param([string]$Triple)
 
     if (-not [string]::IsNullOrWhiteSpace($Triple)) {
@@ -86,8 +96,10 @@ function Resolve-ArchInfo {
     }
 }
 
-# Inspect a PE32+ (64-bit Windows) executable's Import Directory and return imported DLL names.
-function Get-PeImportedDlls {
+# Inspect a PE32/PE32+ Windows executable's Import Directory and return imported DLL names.
+function Get-PeImportedDll {
+    [CmdletBinding()]
+    [OutputType([string[]])]
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -107,37 +119,48 @@ function Get-PeImportedDlls {
     $numSections = [BitConverter]::ToUInt16($bytes, $coffOffset + 2)
     $optHeaderSize = [BitConverter]::ToUInt16($bytes, $coffOffset + 16)
     $optOffset = $coffOffset + 20
+    if (($optOffset + 2) -gt $bytes.Length) {
+        throw "Truncated PE optional header in $Path"
+    }
     $magic = [BitConverter]::ToUInt16($bytes, $optOffset)
 
     # PE32 (0x10B) data directories start at optOffset + 96; PE32+ (0x20B) at optOffset + 112.
     $dataDirBase = if ($magic -eq 0x20B) { $optOffset + 112 } elseif ($magic -eq 0x10B) { $optOffset + 96 } else {
         throw "Unsupported PE optional header magic 0x$($magic.ToString('X')) in $Path"
     }
+    if (($dataDirBase + 16) -gt $bytes.Length) {
+        throw "Truncated PE data directory in $Path"
+    }
 
     # Import Table is DataDirectory[1] (offset +8 from dataDirBase).
     $importRva = [BitConverter]::ToUInt32($bytes, $dataDirBase + 8)
     $importSize = [BitConverter]::ToUInt32($bytes, $dataDirBase + 12)
     if ($importRva -eq 0 -or $importSize -eq 0) {
-        return @()
+        return [string[]]@()
     }
 
     $sections = New-Object System.Collections.Generic.List[hashtable]
     $secOffset = $optOffset + $optHeaderSize
+    if (($secOffset + ($numSections * 40)) -gt $bytes.Length) {
+        throw "Truncated PE section table in $Path"
+    }
     for ($i = 0; $i -lt $numSections; $i++) {
         $entry = $secOffset + ($i * 40)
-        $virtSize = [BitConverter]::ToUInt32($bytes, $entry + 8)
         $virtAddr = [BitConverter]::ToUInt32($bytes, $entry + 12)
         $rawSize  = [BitConverter]::ToUInt32($bytes, $entry + 16)
         $rawPtr   = [BitConverter]::ToUInt32($bytes, $entry + 20)
-        $span = [Math]::Max($virtSize, $rawSize)
-        $sections.Add(@{ VirtAddr = $virtAddr; Span = $span; RawPtr = $rawPtr })
+        $sections.Add(@{ VirtAddr = $virtAddr; RawSize = $rawSize; RawPtr = $rawPtr })
     }
 
     $rvaToOffset = {
         param([uint32]$rva)
         foreach ($s in $sections) {
-            if ($rva -ge $s.VirtAddr -and $rva -lt ($s.VirtAddr + $s.Span)) {
-                return [int]($rva - $s.VirtAddr + $s.RawPtr)
+            if ($s.RawSize -gt 0 -and $rva -ge $s.VirtAddr -and ($rva - $s.VirtAddr) -lt $s.RawSize) {
+                $offset = [int64]($rva - $s.VirtAddr) + [int64]$s.RawPtr
+                if ($offset -ge 0 -and $offset -lt $bytes.Length) {
+                    return [int]$offset
+                }
+                return -1
             }
         }
         return -1
@@ -168,11 +191,12 @@ function Get-PeImportedDlls {
 }
 
 function Assert-NoDynamicVcRuntime {
+    [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string[]]$Binaries)
 
     $forbiddenPattern = '^(vcruntime|msvcp)\d+(_\d+)?\.dll$'
     foreach ($bin in $Binaries) {
-        $imports = Get-PeImportedDlls -Path $bin
+        $imports = Get-PeImportedDll -Path $bin
         $bad = @($imports | Where-Object { $_ -imatch $forbiddenPattern })
         if ($bad.Count -gt 0) {
             throw "$(Split-Path $bin -Leaf) dynamically imports MSVC runtime DLL(s): $($bad -join ', '). Ensure .cargo/config.toml's +crt-static is active and RUSTFLAGS is unset."
@@ -182,6 +206,7 @@ function Assert-NoDynamicVcRuntime {
 
 # Build a deterministic portable ZIP using canonical '/' separators (required by `anterm-updater`).
 function New-CanonicalZipFromDirectory {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][string]$SourceDir,
         [Parameter(Mandatory = $true)][string]$DestinationZip
@@ -190,15 +215,20 @@ function New-CanonicalZipFromDirectory {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-    if (Test-Path -LiteralPath $DestinationZip) {
-        Remove-Item -LiteralPath $DestinationZip -Force
+    $fullDest = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationZip)
+    if (-not $PSCmdlet.ShouldProcess($fullDest, "Create portable ZIP archive")) {
+        return
     }
 
-    $fullSource = (Resolve-Path $SourceDir).Path.TrimEnd('\', '/')
-    $files = Get-ChildItem -LiteralPath $fullSource -Recurse -File -Force | Sort-Object FullName
+    if (Test-Path -LiteralPath $fullDest) {
+        Remove-Item -LiteralPath $fullDest -Force
+    }
+
+    $fullSource = (Resolve-Path -LiteralPath $SourceDir).Path.TrimEnd('\', '/')
+    $files = @(Get-ChildItem -LiteralPath $fullSource -Recurse -File -Force | Sort-Object FullName)
 
     $zip = [System.IO.Compression.ZipFile]::Open(
-        $DestinationZip,
+        $fullDest,
         [System.IO.Compression.ZipArchiveMode]::Create
     )
     try {
@@ -228,13 +258,13 @@ if (-not $SkipBuild) {
         Write-Warning "RUSTFLAGS is set ('$($env:RUSTFLAGS)'), which overrides .cargo/config.toml (+crt-static). Dynamic VCRUNTIME check will fail if +crt-static is missing."
     }
 
-    Write-Host "==> Building release binaries separately (version $Version, target: $(if ($Target) { $Target } else { 'host' }))..."
+    Write-StepMessage "==> Building release binaries separately (version $Version, target: $(if ($Target) { $Target } else { 'host' }))..."
     Push-Location $RootDir
     try {
         # Build each binary crate individually so Cargo workspace feature unification
         # does not leak `anterm-app` features into `anterm-server` or `anterm-updater`.
         foreach ($pkg in @("anterm-app", "anterm-server", "anterm-updater")) {
-            Write-Host "  -> cargo build --release -p $pkg"
+            Write-StepMessage "  -> cargo build --release -p $pkg"
             $cargoArgs = @("build", "--release", "-p", $pkg)
             if (-not [string]::IsNullOrWhiteSpace($Target)) {
                 $cargoArgs += @("--target", $Target)
@@ -248,7 +278,7 @@ if (-not $SkipBuild) {
         Pop-Location
     }
 } else {
-    Write-Host "==> Skipping cargo build (-SkipBuild); using binaries from $BinDir"
+    Write-StepMessage "==> Skipping cargo build (-SkipBuild); using binaries from $BinDir"
 }
 
 $AppExe     = Join-Path $BinDir "anterm-app.exe"
@@ -261,7 +291,7 @@ foreach ($bin in @($AppExe, $ServerExe, $UpdaterExe)) {
     }
 }
 
-Write-Host "==> Checking static CRT linkage (no dynamic VCRUNTIME/MSVCP imports)..."
+Write-StepMessage "==> Checking static CRT linkage (no dynamic VCRUNTIME/MSVCP imports)..."
 Assert-NoDynamicVcRuntime -Binaries @($AppExe, $ServerExe, $UpdaterExe)
 
 $ConptyDir = Join-Path $RootDir "assets\windows\conpty\$($Arch.Conpty)"
@@ -292,7 +322,7 @@ $StageDir = Join-Path ([System.IO.Path]::GetTempPath()) ("anterm-win-stage-" + [
 New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 
 try {
-    Write-Host "==> Staging portable payload ($($Arch.Desktop))..."
+    Write-StepMessage "==> Staging portable payload ($($Arch.Desktop))..."
 
     # Exact `PORTABLE_MANAGED_ROOTS` layout verified by `crates/anterm-updater/src/windows.rs`.
     Copy-Item -LiteralPath $AppExe -Destination (Join-Path $StageDir "anterm-app.exe")
@@ -315,13 +345,16 @@ try {
 
     $StageCompletionsDir = Join-Path $StageDir "completions"
     New-Item -ItemType Directory -Path $StageCompletionsDir -Force | Out-Null
-    Get-ChildItem -LiteralPath $CompletionsDir -Filter "*.json" -File |
-        Copy-Item -Destination $StageCompletionsDir
+    $CompletionFiles = @(Get-ChildItem -LiteralPath $CompletionsDir -Filter "*.json" -File)
+    if ($CompletionFiles.Count -eq 0) {
+        throw "No completion JSON files found in $CompletionsDir"
+    }
+    $CompletionFiles | Copy-Item -Destination $StageCompletionsDir
 
-    Write-Host "==> Creating $ZipPath ..."
+    Write-StepMessage "==> Creating $ZipPath ..."
     New-CanonicalZipFromDirectory -SourceDir $StageDir -DestinationZip $ZipPath
 
-    Write-Host "==> Copying standalone server binary $StandaloneServerPath ..."
+    Write-StepMessage "==> Copying standalone server binary $StandaloneServerPath ..."
     Copy-Item -LiteralPath $ServerExe -Destination $StandaloneServerPath -Force
 
     # Generate lowercase SHA-256 checksums matching `anterm-updater` (`checksums.txt`) and `package-release.sh` (`SHA256SUMS.txt`).
@@ -335,7 +368,7 @@ try {
     [System.IO.File]::WriteAllText($Sha256SumsPath, $ChecksumBody, [System.Text.UTF8Encoding]::new($false))
 
     if (-not $SkipVerify) {
-        Write-Host "==> Running smoke checks..."
+        Write-StepMessage "==> Running smoke checks..."
         & $StandaloneServerPath --version
         if ($LASTEXITCODE -ne 0) {
             throw "anterm-server --version failed with exit code $LASTEXITCODE"
@@ -344,25 +377,54 @@ try {
         $VerifyStage = Join-Path ([System.IO.Path]::GetTempPath()) ("anterm-win-verify-" + [System.Guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $VerifyStage -Force | Out-Null
         try {
-            & $UpdaterExe verify-portable $ZipPath $ChecksumsPath $ZipName $Version $VerifyStage
-            if ($LASTEXITCODE -ne 0) {
-                throw "anterm-updater verify-portable failed with exit code $LASTEXITCODE"
+            # `anterm-updater.exe` is built with `windows_subsystem = "windows"`, so calling it
+            # with `&` in PowerShell returns immediately without waiting for exit. Run it via
+            # System.Diagnostics.Process so we wait synchronously, capture stderr, and check the real exit code.
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $UpdaterExe
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.CreateNoWindow = $true
+            $quotedArgs = @("verify-portable", $ZipPath, $ChecksumsPath, $ZipName, $Version, $VerifyStage) | ForEach-Object {
+                if ($_ -match '[\s"]') {
+                    '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
+                } else {
+                    $_
+                }
             }
-            Write-Host "  -> anterm-updater verify-portable: OK"
+            $psi.Arguments = $quotedArgs -join ' '
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            try {
+                $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+                $stderrTask = $proc.StandardError.ReadToEndAsync()
+                $proc.WaitForExit()
+                $verifyStdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+                $verifyStderr = $stderrTask.GetAwaiter().GetResult().Trim()
+                if ($proc.ExitCode -ne 0) {
+                    $detail = if ($verifyStderr) { ": $verifyStderr" } elseif ($verifyStdout) { ": $verifyStdout" } else { "" }
+                    throw "anterm-updater verify-portable failed with exit code $($proc.ExitCode)$detail"
+                }
+            } finally {
+                $proc.Dispose()
+            }
+            Write-StepMessage "  -> anterm-updater verify-portable: OK"
         } finally {
             Remove-Item -LiteralPath $VerifyStage -Recurse -Force -ErrorAction SilentlyContinue
         }
     } else {
-        Write-Host "==> Skipping smoke checks (-SkipVerify)"
+        Write-StepMessage "==> Skipping smoke checks (-SkipVerify)"
     }
 } finally {
     Remove-Item -LiteralPath $StageDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host ""
-Write-Host "==> Release artifacts in ${OutDir}:"
-Get-Item -LiteralPath @($ZipPath, $StandaloneServerPath, $ChecksumsPath, $Sha256SumsPath) |
-    Format-Table Name, @{Label="Size (MB)"; Expression={[math]::Round($_.Length / 1MB, 2)}}, LastWriteTime -AutoSize
+Write-StepMessage ""
+Write-StepMessage "==> Release artifacts in ${OutDir}:"
+$ArtifactTable = Get-Item -LiteralPath @($ZipPath, $StandaloneServerPath, $ChecksumsPath, $Sha256SumsPath) |
+    Format-Table Name, @{Label = "Size (MB)"; Expression = { [math]::Round($_.Length / 1MB, 2) } }, LastWriteTime -AutoSize |
+    Out-String
+Write-StepMessage $ArtifactTable.TrimEnd()
 
-Write-Host "==> checksums.txt:"
-Get-Content -LiteralPath $ChecksumsPath
+Write-StepMessage "==> checksums.txt:"
+Write-StepMessage ((Get-Content -LiteralPath $ChecksumsPath -Raw).TrimEnd())

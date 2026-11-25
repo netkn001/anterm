@@ -21,6 +21,7 @@ libc = "0.2"
 anterm-core = { path = "../anterm-core" }
 smol.workspace = true
 async_zip = { version = "0.0.19", default-features = false, features = ["deflate"] }
+tempfile = "3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

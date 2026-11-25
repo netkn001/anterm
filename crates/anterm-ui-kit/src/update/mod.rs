@@ -1,8 +1,12 @@
+#[cfg(target_os = "windows")]
+use anyhow::Context as _;
 use anyhow::Result;
 use gpui::{AnyWindowHandle, App, AsyncApp, Global};
 use smol::future::FutureExt as _;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 

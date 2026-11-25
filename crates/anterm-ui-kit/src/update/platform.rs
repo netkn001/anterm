@@ -19,8 +19,8 @@ use crate::config::Config;
 use super::{DOWNLOAD_VERIFYING, PLAN_VERSION, PendingUpdate, ReleaseAsset, UpdateInstallHint};
 #[cfg(target_os = "windows")]
 use super::{
-    WINDOWS_INNO_INSTALL_MARKER, WINDOWS_PORTABLE_BACKUP_INCOMPLETE,
-    WINDOWS_PORTABLE_BACKUP_PREFIX, WINDOWS_PORTABLE_MARKER, WINDOWS_PORTABLE_MARKER_CONTENT,
+    WINDOWS_INNO_INSTALL_MARKER, WINDOWS_PORTABLE_MARKER, WINDOWS_PORTABLE_MARKER_CONTENT,
+    localized_update_install_hint,
 };
 
 /// The release package this installation can replace itself with. Split from

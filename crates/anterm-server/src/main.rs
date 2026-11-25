@@ -1,3 +1,8 @@
+// Non-English MSVC link.exe emits localized "Creating library ... and object ..."
+// stdout lines when dependencies (such as aws-lc-sys) export symbols, which rustc's
+// English-only linker-info filter does not recognize.
+#![cfg_attr(target_os = "windows", allow(unknown_lints, linker_messages))]
+
 use std::io;
 use std::process::ExitCode;
 

@@ -4,6 +4,6 @@ pub use anterm_ui_kit::{
     window_state,
 };
 #[cfg(target_os = "windows")]
-pub use anterm_ui_kit::{aumid, toast_activator};
+pub use anterm_ui_kit::aumid;
 
 pub mod session;

@@ -891,9 +891,6 @@ impl TabAgentSession {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) use anterm_ui_kit::intent::window_backdrop_label_key;
-
 /// What a full-window overlay (settings, the opened file, the diff view)
 /// paints between its own fill and its content.
 ///

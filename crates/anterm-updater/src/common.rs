@@ -6,10 +6,13 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
+#[cfg(unix)]
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(unix)]
 use anterm_protocol::updater::contract::{FLAG_CONFIG_DIR, FLAG_RESULT_FILE};
 
 #[cfg(unix)]
@@ -134,6 +137,7 @@ pub(crate) fn healthy_after_grace(child: &mut Child) -> Result<(), String> {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn remove_path(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());

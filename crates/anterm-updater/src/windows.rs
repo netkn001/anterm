@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString, c_void};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Component, Path, PathBuf};

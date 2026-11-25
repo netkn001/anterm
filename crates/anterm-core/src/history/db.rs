@@ -22,6 +22,7 @@ const SESSION_ALIAS_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 pub struct HistoryDb {
     conn: Connection,
+    #[cfg(unix)]
     path: Option<PathBuf>,
 }
 
@@ -48,6 +49,7 @@ impl HistoryDb {
         let conn = Connection::open(&path)?;
         let mut db = Self {
             conn,
+            #[cfg(unix)]
             path: Some(path),
         };
         db.init()?;
@@ -59,7 +61,11 @@ impl HistoryDb {
     /// In-memory database for fast isolated unit tests.
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let mut db = Self { conn, path: None };
+        let mut db = Self {
+            conn,
+            #[cfg(unix)]
+            path: None,
+        };
         db.init()?;
         Ok(db)
     }

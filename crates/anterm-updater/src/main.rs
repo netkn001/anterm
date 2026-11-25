@@ -2,6 +2,7 @@
     all(target_os = "windows", not(debug_assertions)),
     windows_subsystem = "windows"
 )]
+#![cfg_attr(target_os = "windows", allow(unknown_lints, linker_messages))]
 #![cfg_attr(
     not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
     allow(dead_code)
