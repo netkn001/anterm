@@ -1,0 +1,317 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0; defaults to v<Cargo.toml version>)"
+        required: false
+        type: string
+      draft:
+        description: "Create as a draft release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Validate version & tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      draft: ${{ steps.meta.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version and verify tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Failed to read workspace version from Cargo.toml"
+            exit 1
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            if [[ "$TAG" != "v${VERSION}" ]]; then
+              echo "::error::Tag '${TAG}' does not match Cargo.toml workspace version 'v${VERSION}'."
+              exit 1
+            fi
+            DRAFT="false"
+          else
+            TAG="${{ inputs.tag }}"
+            if [[ -z "$TAG" ]]; then
+              TAG="v${VERSION}"
+            fi
+            if [[ "$TAG" != "v${VERSION}" ]]; then
+              echo "::error::Input tag '${TAG}' does not match Cargo.toml workspace version 'v${VERSION}'."
+              exit 1
+            fi
+            DRAFT="${{ inputs.draft }}"
+          fi
+
+          PRERELEASE="false"
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="true"
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "draft=${DRAFT}" >> "$GITHUB_OUTPUT"
+          echo "Validated release tag ${TAG} (version=${VERSION}, prerelease=${PRERELEASE}, draft=${DRAFT})"
+
+  build-macos:
+    name: macOS (${{ matrix.arch }})
+    needs: prepare
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-macos-${{ matrix.target }}
+
+      - name: Build and package macOS artifacts
+        run: ./scripts/package-release.sh --dmg --target "${{ matrix.target }}"
+
+      - name: Upload macOS release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: |
+            dist/anterm-*-macos-*.zip
+            dist/anterm-*-macos-*.dmg
+            dist/anterm-server-macos-*
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-${{ matrix.target }}
+
+      - name: Build and package Windows portable artifacts
+        shell: pwsh
+        run: .\scripts\package-windows.ps1 -Target "${{ matrix.target }}"
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: |
+            dist/anterm-*-windows-*.zip
+            dist/anterm-server-windows-*.exe
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux desktop & musl server (x86_64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-x86_64
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config cmake musl-tools \
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libwayland-dev libfontconfig1-dev libfreetype6-dev \
+            libvulkan-dev libasound2-dev libssl-dev
+
+      - name: Build and package Linux desktop tarball
+        run: ./scripts/package-release.sh
+
+      - name: Build static musl anterm-server (x86_64)
+        run: |
+          cargo build --release -p anterm-server --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/anterm-server dist/anterm-server-linux-x86_64-musl
+          chmod +x dist/anterm-server-linux-x86_64-musl
+          dist/anterm-server-linux-x86_64-musl --version
+
+      - name: Upload Linux x86_64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x86_64
+          path: |
+            dist/anterm-*-linux-x86_64.tar.gz
+            dist/anterm-server-linux-x86_64-musl
+          if-no-files-found: error
+
+  build-linux-server-arm64:
+    name: Linux musl server (aarch64)
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-aarch64-musl
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build static musl anterm-server (aarch64)
+        run: |
+          mkdir -p dist
+          cargo build --release -p anterm-server --target aarch64-unknown-linux-musl
+          cp target/aarch64-unknown-linux-musl/release/anterm-server dist/anterm-server-linux-aarch64-musl
+          chmod +x dist/anterm-server-linux-aarch64-musl
+          dist/anterm-server-linux-aarch64-musl --version
+
+      - name: Upload Linux aarch64 server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-server-aarch64
+          path: dist/anterm-server-linux-aarch64-musl
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build-macos
+      - build-windows
+      - build-linux
+      - build-linux-server-arm64
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate unified checksums.txt and SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          rm -f checksums.txt SHA256SUMS.txt
+          LC_ALL=C sha256sum $(find . -maxdepth 1 -type f ! -name 'checksums.txt' ! -name 'SHA256SUMS.txt' -printf '%f\n' | sort) \
+            | tee checksums.txt > SHA256SUMS.txt
+          echo "==> Unified checksums.txt:"
+          cat checksums.txt
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.version }}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && (/^## \[/ || /^\[[^\]]+\]: /) { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.prepare.outputs.tag }}"
+          PRERELEASE="${{ needs.prepare.outputs.prerelease }}"
+          DRAFT="${{ needs.prepare.outputs.draft }}"
+
+          EXTRA_FLAGS=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            EXTRA_FLAGS+=(--prerelease)
+          fi
+          if [[ "$DRAFT" == "true" ]]; then
+            EXTRA_FLAGS+=(--draft)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            if [[ -s release-notes.md ]]; then
+              gh release create "$TAG" release-assets/* \
+                --title "anterm ${TAG}" \
+                --notes-file release-notes.md \
+                "${EXTRA_FLAGS[@]}"
+            else
+              gh release create "$TAG" release-assets/* \
+                --title "anterm ${TAG}" \
+                --generate-notes \
+                "${EXTRA_FLAGS[@]}"
+            fi
+          fi

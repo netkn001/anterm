@@ -71,18 +71,23 @@ fi
 
 OS="$(uname -s)"
 RAW_ARCH="$(uname -m)"
+case "$RAW_ARCH" in
+    aarch64|arm64) HOST_ARCH="arm64" ;;
+    x86_64|amd64)  HOST_ARCH="x86_64" ;;
+    *)             HOST_ARCH="$RAW_ARCH" ;;
+esac
 if [[ -n "$TARGET" ]]; then
     case "$TARGET" in
-        aarch64-*) ARCH="arm64" ;;
-        x86_64-*)  ARCH="x86_64" ;;
-        *)         ARCH="$RAW_ARCH" ;;
+        aarch64-*) ARCH="arm64";  SERVER_ARCH="aarch64" ;;
+        x86_64-*)  ARCH="x86_64"; SERVER_ARCH="x86_64" ;;
+        *)         ARCH="$RAW_ARCH"; SERVER_ARCH="$RAW_ARCH" ;;
     esac
     BIN_DIR="$ROOT_DIR/target/$TARGET/release"
 else
     case "$RAW_ARCH" in
-        aarch64|arm64) ARCH="arm64" ;;
-        x86_64|amd64)  ARCH="x86_64" ;;
-        *)             ARCH="$RAW_ARCH" ;;
+        aarch64|arm64) ARCH="arm64";  SERVER_ARCH="aarch64" ;;
+        x86_64|amd64)  ARCH="x86_64"; SERVER_ARCH="x86_64" ;;
+        *)             ARCH="$RAW_ARCH"; SERVER_ARCH="$RAW_ARCH" ;;
     esac
     BIN_DIR="$ROOT_DIR/target/release"
 fi
@@ -119,10 +124,10 @@ package_macos() {
     local app="$OUT_DIR/anterm.app"
     local zip="$OUT_DIR/anterm-${VERSION}-macos-${ARCH}.zip"
     local dmg="$OUT_DIR/anterm-${VERSION}-macos-${ARCH}.dmg"
-    local srv="$OUT_DIR/anterm-server-macos-${ARCH}"
+    local srv="$OUT_DIR/anterm-server-macos-${SERVER_ARCH}"
 
     echo "==> Assembling $app ..."
-    rm -rf "$app" "$zip" "$dmg" "$srv" "$OUT_DIR/SHA256SUMS.txt"
+    rm -rf "$app" "$zip" "$dmg" "$srv" "$OUT_DIR/SHA256SUMS.txt" "$OUT_DIR/checksums.txt"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
     cp "$BIN_DIR/anterm-app"     "$app/Contents/MacOS/anterm-app"
@@ -194,19 +199,23 @@ EOF
     chmod +x "$srv"
     checksum_files+=("$(basename "$srv")")
 
-    (cd "$OUT_DIR" && shasum -a 256 "${checksum_files[@]}" > SHA256SUMS.txt)
+    (cd "$OUT_DIR" && shasum -a 256 "${checksum_files[@]}" | tee SHA256SUMS.txt > checksums.txt)
 
-    echo "==> Smoke check:"
-    "$srv" --version
+    if [[ "$ARCH" == "$HOST_ARCH" ]]; then
+        echo "==> Smoke check:"
+        "$srv" --version
+    else
+        echo "==> Skipping smoke check (cross-built $ARCH on $HOST_ARCH host)"
+    fi
 }
 
 package_linux() {
     local stage="$OUT_DIR/anterm-${VERSION}-linux-${ARCH}"
     local tar="$OUT_DIR/anterm-${VERSION}-linux-${ARCH}.tar.gz"
-    local srv="$OUT_DIR/anterm-server-linux-${ARCH}"
+    local srv="$OUT_DIR/anterm-server-linux-${SERVER_ARCH}"
 
     echo "==> Packaging $tar ..."
-    rm -rf "$stage" "$tar" "$srv" "$OUT_DIR/SHA256SUMS.txt"
+    rm -rf "$stage" "$tar" "$srv" "$OUT_DIR/SHA256SUMS.txt" "$OUT_DIR/checksums.txt"
     mkdir -p "$stage"
     cp "$BIN_DIR/anterm-app" "$BIN_DIR/anterm-updater" "$stage/"
     chmod +x "$stage/anterm-app" "$stage/anterm-updater"
@@ -219,10 +228,14 @@ package_linux() {
     chmod +x "$srv"
     checksum_files+=("$(basename "$srv")")
 
-    (cd "$OUT_DIR" && sha256sum "${checksum_files[@]}" > SHA256SUMS.txt)
+    (cd "$OUT_DIR" && sha256sum "${checksum_files[@]}" | tee SHA256SUMS.txt > checksums.txt)
 
-    echo "==> Smoke check:"
-    "$srv" --version
+    if [[ "$ARCH" == "$HOST_ARCH" ]]; then
+        echo "==> Smoke check:"
+        "$srv" --version
+    else
+        echo "==> Skipping smoke check (cross-built $ARCH on $HOST_ARCH host)"
+    fi
 }
 
 case "$OS" in

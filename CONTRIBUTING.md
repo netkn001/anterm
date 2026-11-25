@@ -98,6 +98,19 @@ cargo test --workspace --lib
 4. Update relevant documentation (`README.md`, `README.zh-CN.md`, `docs/`, `CHANGELOG.md`) when behavior, shortcuts, or configuration keys change.
 5. Open a pull request describing the motivation, design trade-offs, and verification steps.
 
+---
+
+## Cutting a Release
+
+Tag pushes matching `v*` trigger [`.github/workflows/release.yml`](.github/workflows/release.yml), which validates that the tag matches `[workspace.package].version` in `Cargo.toml`, builds macOS (`arm64` / `x86_64`), Windows (`x86_64` / `arm64`), Linux (`x86_64` desktop + `x86_64`/`aarch64` musl `anterm-server`), generates a unified `checksums.txt` / `SHA256SUMS.txt`, and publishes a GitHub Release with notes extracted from `CHANGELOG.md`:
+
+```bash
+# 1. Bump version in Cargo.toml and move release notes under [X.Y.Z] in CHANGELOG.md
+# 2. Tag and push
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Licensing
 
 By contributing to anterm, you agree that your contributions will be licensed under the [MIT License](LICENSE).
