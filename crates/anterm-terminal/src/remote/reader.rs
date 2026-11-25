@@ -722,15 +722,19 @@ impl ReaderLoop {
         if !self.flush_batch() {
             return false;
         }
-        // A live echo lands just before the shell's SIGWINCH redraw; a replayed
-        // Size heads old bytes that nothing is going to repaint.
-        let shell_redraws = !self.replaying_state
-            && !self.signals.local_conpty.load(Ordering::Relaxed)
-            && self
-                .signals
-                .shell
-                .lock()
-                .is_ok_and(|s| s.active && s.at_prompt);
+        let mode = if self.signals.local_conpty.load(Ordering::Relaxed) {
+            crate::prompt::prompt_reflow::ResizeMode::Conpty
+        } else {
+            // A live echo lands just before the shell's SIGWINCH redraw; a replayed
+            // Size heads old bytes that nothing is going to repaint.
+            let shell_redraws = !self.replaying_state
+                && self
+                    .signals
+                    .shell
+                    .lock()
+                    .is_ok_and(|s| s.active && s.at_prompt);
+            crate::prompt::prompt_reflow::ResizeMode::Standard { shell_redraws }
+        };
         {
             let mut term = self.term.lock();
             if self.quit.load(Ordering::SeqCst) {
@@ -739,7 +743,7 @@ impl ReaderLoop {
             crate::prompt::prompt_reflow::resize(
                 &mut term,
                 TermSize::new(ws.cols as usize, ws.rows as usize),
-                shell_redraws,
+                mode,
             );
             self.signals.mirror.publish(&term);
         }

@@ -27,18 +27,38 @@
 //! they are also the rows the shell redraws without being told where they are.
 
 use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::grid::{Dimensions as _, Grid, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{MIN_COLUMNS, Term, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler as _};
 
 use crate::backend::size::TermSize;
 
-/// Resizes `term` to `size`. `shell_redraws` says the pane is at a shell
-/// prompt that will repaint itself for the new width — the caller's shell
-/// integration state; everything else resizes exactly as `Term::resize` does.
-pub fn resize<T: EventListener>(term: &mut Term<T>, size: TermSize, shell_redraws: bool) {
+/// How [`resize`] reconciles the terminal grid with the PTY behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeMode {
+    /// Standard Unix/PTY resize: `alacritty_terminal` pulls scrollback into
+    /// newly added rows when growing taller, and hands back a wrapped shell
+    /// prompt before reflowing when `shell_redraws` is true.
+    Standard { shell_redraws: bool },
+    /// Windows ConPTY resize: conhost anchors its viewport at row 0 and never
+    /// pulls emulator scrollback back onto the screen when growing taller or
+    /// unwrapping wrapped rows. Keep scrollback in history and leave newly
+    /// freed viewport rows blank at the bottom so ConPTY's absolute cursor
+    /// coordinates stay aligned with the grid.
+    Conpty,
+}
+
+/// Resizes `term` to `size` according to `mode`.
+pub fn resize<T: EventListener>(term: &mut Term<T>, size: TermSize, mode: ResizeMode) {
+    match mode {
+        ResizeMode::Conpty => resize_conpty(term, size),
+        ResizeMode::Standard { shell_redraws } => resize_standard(term, size, shell_redraws),
+    }
+}
+
+fn resize_standard<T: EventListener>(term: &mut Term<T>, size: TermSize, shell_redraws: bool) {
     // Rows alone reflow nothing, and the alternate screen is a full-screen
     // program's, which repaints the whole of it.
     let reflows = size.cols.max(MIN_COLUMNS) != term.columns();
@@ -65,6 +85,199 @@ pub fn resize<T: EventListener>(term: &mut Term<T>, size: TermSize, shell_redraw
     }
     let last = Column(term.columns() - 1);
     term.grid_mut().cursor.point.column = cursor.column.min(last);
+}
+
+/// Resizes a Windows ConPTY primary grid without pulling scrollback lines down
+/// into the viewport.
+///
+/// ConPTY owns an internal `W×H` screen buffer anchored at top row 0 and emits
+/// absolute row jumps (`ESC[row;colH]`) relative to that buffer. When the pane
+/// grows taller or widens and unwraps wrapped viewport lines, ConPTY leaves
+/// row 0 pinned at the top and pads blank rows at the bottom — it cannot see
+/// (and never pulls back) scrollback lines the terminal emulator already
+/// scrolled off screen (including output archived by `SCROLL_RESTORED_AWAY`
+/// after a restart). `alacritty_terminal::Grid::grow_lines` and
+/// `Grid::grow_columns` do the opposite, pulling scrollback lines onto rows
+/// `0..pulled` and shifting the live prompt down so ConPTY's next absolute
+/// jump overwrites old output mid-screen.
+fn resize_conpty<T: EventListener>(term: &mut Term<T>, size: TermSize) {
+    if term.mode().contains(TermMode::ALT_SCREEN) {
+        term.resize(size);
+        return;
+    }
+
+    let old_cols = term.columns();
+    let old_rows = term.screen_lines();
+    let target_cols = size.columns();
+    let target_rows = size.screen_lines();
+
+    if old_cols == target_cols && old_rows == target_rows {
+        return;
+    }
+
+    // Apply width changes at the old height first so column reflow and height
+    // growth stay decoupled.
+    if target_cols != old_cols {
+        if target_cols > old_cols {
+            widen_columns_anchored(term, target_cols);
+        } else {
+            term.resize(TermSize::new(target_cols, old_rows));
+        }
+    }
+
+    // Apply height changes at `target_cols`. Shrinking never pulls from
+    // scrollback; growing must keep scrollback in history and add blank rows
+    // at the bottom.
+    if target_rows != old_rows {
+        if target_rows > old_rows {
+            grow_lines_anchored(term, target_rows);
+        } else {
+            term.resize(TermSize::new(target_cols, target_rows));
+        }
+    }
+}
+
+fn grow_lines_anchored<T: EventListener>(term: &mut Term<T>, target_rows: usize) {
+    let cols = term.columns();
+    let old_rows = term.screen_lines();
+    let old_history = term.grid().history_size();
+    let pulled = old_history.min(target_rows - old_rows);
+    if pulled == 0 {
+        term.resize(TermSize::new(cols, target_rows));
+        return;
+    }
+
+    let old_display_offset = term.grid().display_offset();
+    let old_vi_cursor = term.vi_mode_cursor.point;
+    let old_selection = term.selection.take();
+
+    term.resize(TermSize::new(cols, target_rows));
+
+    let region = Line(0)..Line(target_rows as i32);
+    {
+        let grid = term.grid_mut();
+        let template = std::mem::take(&mut grid.cursor.template);
+        grid.scroll_up(&region, pulled);
+        grid.cursor.template = template;
+        grid.cursor.point.line = Line((grid.cursor.point.line.0 - pulled as i32).max(0));
+        grid.saved_cursor.point.line =
+            Line((grid.saved_cursor.point.line.0 - pulled as i32).max(0));
+        grid.scroll_display(Scroll::Bottom);
+        if old_display_offset > 0 {
+            let delta = i32::try_from(old_display_offset).unwrap_or(i32::MAX);
+            grid.scroll_display(Scroll::Delta(delta));
+        }
+    }
+
+    let viewport_top = Line(-(term.grid().display_offset() as i32));
+    let viewport_bottom = viewport_top + term.bottommost_line();
+    term.vi_mode_cursor.point.line = old_vi_cursor.line.clamp(viewport_top, viewport_bottom);
+    term.vi_mode_cursor.point.column = old_vi_cursor.column.min(term.last_column());
+    term.selection = old_selection;
+}
+
+fn widen_columns_anchored<T: EventListener>(term: &mut Term<T>, target_cols: usize) {
+    let old_cols = term.columns();
+    let rows = term.screen_lines();
+    let old_history = term.grid().history_size();
+
+    // Without scrollback, or without wrapped lines inside the viewport,
+    // `Grid::grow_columns` cannot pull any scrollback row onto the viewport.
+    // If a single logical line already wraps across the scrollback/viewport
+    // seam (`Line(-1)` -> `Line(0)`), let Alacritty unwrap it naturally.
+    if old_history == 0
+        || term.grid()[Line(-1)][Column(old_cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
+    {
+        term.resize(TermSize::new(target_cols, rows));
+        return;
+    }
+
+    let any_viewport_wrap = (0..rows).any(|line| {
+        term.grid()[Line(line as i32)][Column(old_cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
+    });
+    if !any_viewport_wrap {
+        term.resize(TermSize::new(target_cols, rows));
+        return;
+    }
+
+    // Measure the exact number of rows `alacritty_terminal`'s own
+    // `grow_columns` will pull from scrollback into the viewport by running it
+    // on a viewport-sized probe backed by `rows` unwrapped sentinel history
+    // lines.
+    let mut probe: Grid<Cell> = Grid::new(rows, old_cols, rows);
+    probe.scroll_up(&(Line(0)..Line(rows as i32)), rows);
+    for line in 0..rows {
+        let src = &term.grid()[Line(line as i32)];
+        let dst = &mut probe[Line(line as i32)];
+        for col in 0..old_cols {
+            dst[Column(col)] = src[Column(col)].clone();
+        }
+    }
+    probe.cursor = term.grid().cursor.clone();
+    probe.resize(true, rows, target_cols);
+    let viewport_pulled = rows.saturating_sub(probe.history_size());
+    if viewport_pulled == 0 {
+        term.resize(TermSize::new(target_cols, rows));
+        return;
+    }
+
+    // Every hard-broken logical line in scrollback takes at least one physical
+    // row after widening. Only when scrollback has fewer logical lines than
+    // `viewport_pulled` do we need to measure the exact post-widening
+    // scrollback height so we never scroll back more rows than existed.
+    let mut logical_history = 0usize;
+    for h in 1..=old_history {
+        if !term.grid()[Line(-(h as i32))][Column(old_cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
+        {
+            logical_history += 1;
+            if logical_history >= viewport_pulled {
+                break;
+            }
+        }
+    }
+    let pulled = if logical_history >= viewport_pulled {
+        viewport_pulled
+    } else {
+        let mut probe_h: Grid<Cell> = Grid::new(1, old_cols, old_history);
+        for h in (1..=old_history).rev() {
+            let src = &term.grid()[Line(-(h as i32))];
+            let dst = &mut probe_h[Line(0)];
+            for col in 0..old_cols {
+                dst[Column(col)] = src[Column(col)].clone();
+            }
+            probe_h.scroll_up(&(Line(0)..Line(1)), 1);
+        }
+        probe_h.resize(true, 1, target_cols);
+        probe_h.history_size().min(viewport_pulled)
+    };
+
+    term.resize(TermSize::new(target_cols, rows));
+
+    if pulled > 0 {
+        let region = Line(0)..Line(rows as i32);
+        {
+            let grid = term.grid_mut();
+            let template = std::mem::take(&mut grid.cursor.template);
+            grid.scroll_up(&region, pulled);
+            grid.cursor.template = template;
+            grid.cursor.point.line = Line((grid.cursor.point.line.0 - pulled as i32).max(0));
+            let max_line = Line(rows as i32 - 1);
+            grid.saved_cursor.point.line = grid.saved_cursor.point.line.min(max_line);
+        }
+        let viewport_top = Line(-(term.grid().display_offset() as i32));
+        let viewport_bottom = viewport_top + term.bottommost_line();
+        term.vi_mode_cursor.point.line = term
+            .vi_mode_cursor
+            .point
+            .line
+            .clamp(viewport_top, viewport_bottom);
+    }
 }
 
 /// The two prompt marks the shell brackets its prompt with.
@@ -233,6 +446,19 @@ mod tests {
         format!("[~]{}{CLOCK}", " ".repeat(cols - 12))
     }
 
+    fn standard(shell_redraws: bool) -> ResizeMode {
+        ResizeMode::Standard { shell_redraws }
+    }
+
+    fn viewport_row(term: &Term<VoidListener>, line: i32) -> String {
+        let row = &term.grid()[Line(line)];
+        (0..term.columns())
+            .map(|col| row[Column(col)].c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
     /// The reported pattern: a clock prompt redrawn after each step of a drag
     /// that narrows the pane by more than one column at a time, then widens it
     /// back. Measured against the unguarded resize, so the test also proves it
@@ -245,7 +471,7 @@ mod tests {
             parser.advance(&mut term, &zsh_redraw(98, 0, ""));
             for cols in [95, 92, 89, 86, 89, 92, 95, 98] {
                 if guarded {
-                    resize(&mut term, TermSize::new(cols, 12), true);
+                    resize(&mut term, TermSize::new(cols, 12), standard(true));
                 } else {
                     term.resize(TermSize::new(cols, 12));
                 }
@@ -272,7 +498,7 @@ mod tests {
         let (mut term, mut parser) = pane(98);
         parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
 
-        resize(&mut term, TermSize::new(60, 12), true);
+        resize(&mut term, TermSize::new(60, 12), standard(true));
         parser.advance(&mut term, &zsh_redraw(60, 1, &buffer));
         assert_eq!(
             text(&term),
@@ -285,7 +511,7 @@ mod tests {
             ]
         );
 
-        resize(&mut term, TermSize::new(98, 12), true);
+        resize(&mut term, TermSize::new(98, 12), standard(true));
         parser.advance(&mut term, &zsh_redraw(98, 2, &buffer));
         assert_eq!(
             text(&term),
@@ -306,16 +532,16 @@ mod tests {
     fn back_to_back_reflows_before_the_redraw_strand_nothing() {
         let (mut term, mut parser) = pane(98);
         parser.advance(&mut term, &zsh_redraw(98, 0, ""));
-        resize(&mut term, TermSize::new(92, 12), true);
-        resize(&mut term, TermSize::new(86, 12), true);
+        resize(&mut term, TermSize::new(92, 12), standard(true));
+        resize(&mut term, TermSize::new(86, 12), standard(true));
         parser.advance(&mut term, &zsh_redraw(86, 0, ""));
         assert_eq!(text(&term), ["echo hi", "hi", &prompt_row(86)]);
 
         let buffer = "x".repeat(150);
         let (mut term, mut parser) = pane(98);
         parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
-        resize(&mut term, TermSize::new(60, 12), true);
-        resize(&mut term, TermSize::new(80, 12), true);
+        resize(&mut term, TermSize::new(60, 12), standard(true));
+        resize(&mut term, TermSize::new(80, 12), standard(true));
         parser.advance(&mut term, &zsh_redraw(80, 1, &buffer));
         assert_eq!(
             text(&term),
@@ -340,7 +566,7 @@ mod tests {
         parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
         assert_eq!(term.grid().cursor.point.line, Line(3));
 
-        resize(&mut term, TermSize::new(60, 4), true);
+        resize(&mut term, TermSize::new(60, 4), standard(true));
         parser.advance(&mut term, &zsh_redraw(60, 1, &buffer));
         assert_eq!(
             text(&term),
@@ -360,8 +586,8 @@ mod tests {
     fn only_a_column_change_at_a_prompt_is_handed_back() {
         let (mut term, mut parser) = pane(98);
         parser.advance(&mut term, "y".repeat(150).as_bytes());
-        resize(&mut term, TermSize::new(60, 12), false);
-        resize(&mut term, TermSize::new(98, 12), false);
+        resize(&mut term, TermSize::new(60, 12), standard(false));
+        resize(&mut term, TermSize::new(98, 12), standard(false));
         assert_eq!(
             text(&term),
             [
@@ -374,7 +600,7 @@ mod tests {
 
         let (mut term, mut parser) = pane(98);
         parser.advance(&mut term, &zsh_redraw(98, 0, ""));
-        resize(&mut term, TermSize::new(98, 8), true);
+        resize(&mut term, TermSize::new(98, 8), standard(true));
         assert_eq!(text(&term), ["echo hi", "hi", &prompt_row(98)]);
     }
 
@@ -384,7 +610,7 @@ mod tests {
     fn the_alternate_screen_is_left_alone() {
         let (mut term, mut parser) = pane(60);
         parser.advance(&mut term, b"\x1b[?1049h\x1b[Hstatus bar");
-        resize(&mut term, TermSize::new(98, 12), true);
+        resize(&mut term, TermSize::new(98, 12), standard(true));
         assert_eq!(text(&term), ["status bar"]);
     }
 
@@ -425,7 +651,7 @@ mod tests {
     fn output_without_a_newline_survives_a_resize_at_the_prompt() {
         let narrow = |guarded: bool| {
             let (mut term, mut parser) = dangling_output(98, guarded);
-            resize(&mut term, TermSize::new(60, 12), true);
+            resize(&mut term, TermSize::new(60, 12), standard(true));
             parser.advance(&mut term, &zsh_redraw(60, 0, ""));
             text(&term)
         };
@@ -441,7 +667,7 @@ mod tests {
     #[test]
     fn widening_keeps_dangling_output_off_the_prompt_row() {
         let (mut term, mut parser) = dangling_output(60, true);
-        resize(&mut term, TermSize::new(98, 12), true);
+        resize(&mut term, TermSize::new(98, 12), standard(true));
         parser.advance(&mut term, &zsh_redraw(98, 0, ""));
         assert_eq!(text(&term), ["echo hi", "hi", "xyz%", &prompt_row(98)]);
     }
@@ -468,5 +694,177 @@ mod tests {
         assert_eq!(PromptMark::parse(b"133;A;k=s"), Some(PromptMark::Opened));
         assert_eq!(PromptMark::parse(b"133;C"), None);
         assert_eq!(PromptMark::parse(b"133;AB"), None);
+    }
+
+    /// Windows ConPTY restore/resize reproduction: restored output is scrolled
+    /// into history (`ESC[2J ESC[H`), the fresh shell draws its prompt at rows
+    /// 0..1, and then the pane grows taller (with or without a width change).
+    /// Standard resize pulls old scrollback rows back into the viewport so
+    /// ConPTY's next absolute jump (`ESC[1;1H` / `ESC[2;1H`) overwrites old
+    /// output mid-screen; ConPTY resize must keep scrollback in history and
+    /// keep the live prompt anchored at row 0.
+    #[test]
+    fn conpty_height_growth_keeps_scrollback_out_of_viewport() {
+        let run = |mode: ResizeMode, target: TermSize| {
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 12), VoidListener);
+            let mut parser: Processor = Processor::new();
+            for i in 0..10 {
+                parser.advance(&mut term, format!("old output line {i}\r\n").as_bytes());
+            }
+            // Same clear-and-home preamble `SCROLL_RESTORED_AWAY` emits on Windows.
+            parser.advance(&mut term, b"\x1b[2J\x1b[H");
+            let history_before = term.grid().history_size();
+            assert!(history_before >= 10);
+
+            // Fresh shell draws a two-line prompt starting at ConPTY row 1 (Line 0).
+            parser.advance(&mut term, b"C:\\data\\userdata\\tmp\r\n");
+            assert_eq!(term.grid().cursor.point.line, Line(1));
+
+            resize(&mut term, target, mode);
+
+            // ConPTY edits the live command on row 2 (Line 1) using absolute CUP.
+            parser.advance(&mut term, b"\x1b[2;1Hbkit open");
+            (term, history_before)
+        };
+
+        // Without the ConPTY fix, standard resize pulls history onto row 0 so
+        // ConPTY's `ESC[2;1H` lands right on top of old restored output.
+        let (standard_term, _) = run(standard(false), TermSize::new(80, 20));
+        assert!(
+            viewport_row(&standard_term, 0).starts_with("old output"),
+            "standard resize must still pull scrollback into viewport"
+        );
+        assert!(
+            viewport_row(&standard_term, 1).contains("bkit open"),
+            "standard resize reproduces ConPTY overwriting old output on row 1"
+        );
+
+        // With `ResizeMode::Conpty` (height-only growth AND width+height growth):
+        for target in [TermSize::new(80, 20), TermSize::new(120, 20)] {
+            let (term, history_before) = run(ResizeMode::Conpty, target);
+            assert_eq!(term.grid().history_size(), history_before);
+            assert_eq!(viewport_row(&term, 0), "C:\\data\\userdata\\tmp");
+            assert_eq!(viewport_row(&term, 1), "bkit open");
+            assert_eq!(term.grid().cursor.point.line, Line(1));
+            for row in 2..target.rows as i32 {
+                assert!(
+                    viewport_row(&term, row).is_empty(),
+                    "row {row} should stay blank at {target:?}, got {:?}",
+                    viewport_row(&term, row)
+                );
+            }
+            assert_eq!(viewport_row(&term, -1), "old output line 9");
+        }
+    }
+
+    /// ConPTY height growth while the user is scrolled up, has an active
+    /// selection, and the terminal has a non-default background template must
+    /// keep scroll position, selection, saved cursor, and blank cell styling
+    /// intact.
+    #[test]
+    fn conpty_height_growth_preserves_scroll_offset_selection_and_default_blanks() {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+        let mut term = Term::new(Config::default(), &TermSize::new(60, 8), VoidListener);
+        let mut parser: Processor = Processor::new();
+        for i in 0..12 {
+            parser.advance(&mut term, format!("history {i}\r\n").as_bytes());
+        }
+        parser.advance(&mut term, b"\x1b[2J\x1b[H");
+        // Set a blue background and save cursor on row 1.
+        parser.advance(&mut term, b"prompt\r\n\x1b[44m\x1b7input");
+        let saved_before = term.grid().saved_cursor.point;
+        let history_before = term.grid().history_size();
+
+        term.scroll_display(Scroll::Delta(4));
+        assert_eq!(term.grid().display_offset(), 4);
+
+        let sel = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(0)), Side::Left);
+        term.selection = Some(sel.clone());
+
+        resize(&mut term, TermSize::new(60, 14), ResizeMode::Conpty);
+
+        assert_eq!(term.grid().history_size(), history_before);
+        assert_eq!(term.grid().display_offset(), 4);
+        assert_eq!(term.grid().saved_cursor.point, saved_before);
+        assert_eq!(term.selection, Some(sel));
+        assert_eq!(viewport_row(&term, 0), "prompt");
+        assert_eq!(viewport_row(&term, 1), "input");
+        // Newly added bottom rows must use default background, not SGR 44 blue.
+        assert_eq!(
+            term.grid()[Line(13)][Column(0)].bg,
+            Color::Named(NamedColor::Background)
+        );
+        // Active cursor template keeps SGR 44 blue for subsequent writes.
+        assert_eq!(
+            term.grid().cursor.template.bg,
+            Color::Named(NamedColor::Blue)
+        );
+    }
+
+    /// Widening a ConPTY pane that has a wrapped line in its viewport must not
+    /// pull scrollback rows onto row 0 — both when scrollback is large and
+    /// when scrollback has fewer lines than the unwrapped viewport rows.
+    #[test]
+    fn conpty_widening_wrapped_viewport_keeps_scrollback_in_history() {
+        for history_lines in [20usize, 1usize] {
+            let mut term = Term::new(Config::default(), &TermSize::new(40, 8), VoidListener);
+            let mut parser: Processor = Processor::new();
+            for i in 0..history_lines {
+                parser.advance(&mut term, format!("hist-{i}\r\n").as_bytes());
+            }
+            parser.advance(&mut term, b"\x1b[2J\x1b[H");
+            let history_before = term.grid().history_size();
+
+            // A 95-char line wraps across 3 rows at 40 cols and collapses to 1
+            // row at 120 cols (freeing 2 viewport rows).
+            let long_cmd = "a".repeat(95);
+            parser.advance(&mut term, format!("prompt\r\n{long_cmd}").as_bytes());
+            assert_eq!(term.grid().cursor.point.line, Line(3));
+
+            resize(&mut term, TermSize::new(120, 8), ResizeMode::Conpty);
+
+            assert_eq!(
+                term.grid().history_size(),
+                history_before,
+                "history_lines={history_lines}"
+            );
+            assert_eq!(
+                viewport_row(&term, 0),
+                "prompt",
+                "history_lines={history_lines}"
+            );
+            assert_eq!(
+                viewport_row(&term, 1),
+                long_cmd,
+                "history_lines={history_lines}"
+            );
+            assert_eq!(
+                term.grid().cursor.point.line,
+                Line(1),
+                "history_lines={history_lines}"
+            );
+            assert!(viewport_row(&term, 2).is_empty());
+        }
+    }
+
+    /// ConPTY height shrink and alternate-screen resizes keep standard
+    /// behavior without clobbering top-anchored content.
+    #[test]
+    fn conpty_shrink_and_alt_screen_behave_cleanly() {
+        let mut term = Term::new(Config::default(), &TermSize::new(60, 12), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"line0\r\nline1\r\nline2");
+        resize(&mut term, TermSize::new(60, 6), ResizeMode::Conpty);
+        assert_eq!(viewport_row(&term, 0), "line0");
+        assert_eq!(viewport_row(&term, 1), "line1");
+        assert_eq!(viewport_row(&term, 2), "line2");
+        assert_eq!(term.grid().cursor.point.line, Line(2));
+
+        parser.advance(&mut term, b"\x1b[?1049h\x1b[Halt-top");
+        resize(&mut term, TermSize::new(80, 16), ResizeMode::Conpty);
+        assert_eq!(viewport_row(&term, 0), "alt-top");
     }
 }

@@ -2900,7 +2900,7 @@ fn the_desk_resizing_under_a_lease_is_kept_for_later() {
     drain(&observer_rx);
 
     assert_eq!(
-        controller_resize(&mut st, ws(120, 40)),
+        controller_resize(&mut st, ws(120, 40), false),
         None,
         "the pty stays put"
     );
@@ -2938,6 +2938,54 @@ fn taking_back_ends_the_lease_and_restores_the_desk() {
     assert_eq!(lease_end(&mut st), None, "nothing left to end");
     // The observer that lost it cannot end a lease it no longer holds.
     assert_eq!(lease_release(&mut st, phone), None);
+}
+
+#[test]
+fn controller_resize_skips_redundant_pty_resize_but_still_echoes_size() {
+    let mut st = test_state(true);
+    let (controller_tx, controller_rx) = mpsc::channel();
+    attach_subscriber(&mut st, controller_tx);
+    drain(&controller_rx);
+
+    let initial = st.ring.size();
+    assert_eq!(
+        controller_resize(&mut st, initial, false),
+        None,
+        "identical geometry should not resize the pty again"
+    );
+    assert_eq!(
+        drain(&controller_rx),
+        vec![DaemonMsg::Size(initial)],
+        "an attaching client still receives the Size echo"
+    );
+
+    // Cell metric changes matter on Unix (ws_xpixel/ws_ypixel) but are ignored
+    // by Windows ConPTY's ResizePseudoConsole.
+    let new_metrics = WinSize {
+        cell_w: initial.cell_w + 2,
+        cell_h: initial.cell_h + 2,
+        ..initial
+    };
+    assert_eq!(
+        controller_resize(&mut st, new_metrics, true),
+        None,
+        "ConPTY ignores cell pixel dimensions when cols and rows are unchanged"
+    );
+    assert_eq!(st.ring.size(), new_metrics);
+    assert_eq!(drain(&controller_rx), vec![DaemonMsg::Size(new_metrics)]);
+
+    let back_to_initial = initial;
+    assert_eq!(
+        controller_resize(&mut st, back_to_initial, false),
+        Some(back_to_initial),
+        "Unix PTYs and SSH forward cell pixel metric updates"
+    );
+    assert_eq!(drain(&controller_rx), vec![DaemonMsg::Size(back_to_initial)]);
+
+    let taller = ws(initial.cols, initial.rows + 10);
+    assert_eq!(controller_resize(&mut st, taller, true), Some(taller));
+    assert_eq!(st.ring.size(), taller);
+    assert_eq!(drain(&controller_rx), vec![DaemonMsg::Size(taller)]);
 }
 
 #[test]

@@ -1453,7 +1453,12 @@ impl DaemonPane {
     /// The controller's resize; see [`controller_resize`] for what a lease
     /// makes of it.
     pub fn resize(&self, size: WinSize) {
-        if let Some(size) = controller_resize(&mut self.state.lock().unwrap_or_else(|e| e.into_inner()), size) {
+        let pty_ignores_pixels = cfg!(windows) && matches!(self.backend, PaneBackend::Pty(_));
+        if let Some(size) = controller_resize(
+            &mut self.state.lock().unwrap_or_else(|e| e.into_inner()),
+            size,
+            pty_ignores_pixels,
+        ) {
             self.resize_pty(size);
         }
     }

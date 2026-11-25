@@ -1363,9 +1363,15 @@ impl RemoteTerminal {
         self.size = size;
         self.synced_cell = cell;
         if !echoed {
-            let shell_redraws = !self.is_local_conpty() && self.at_prompt();
+            let mode = if self.is_local_conpty() {
+                crate::prompt::prompt_reflow::ResizeMode::Conpty
+            } else {
+                crate::prompt::prompt_reflow::ResizeMode::Standard {
+                    shell_redraws: self.at_prompt(),
+                }
+            };
             let mut term = self.term.lock();
-            crate::prompt::prompt_reflow::resize(&mut term, size, shell_redraws);
+            crate::prompt::prompt_reflow::resize(&mut term, size, mode);
             self.mirror.publish(&term);
         }
 

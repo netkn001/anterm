@@ -239,7 +239,17 @@ pub(super) fn lease_release(st: &mut PaneState, observer: u64) -> Option<WinSize
 /// The controller's resize. Under a lease it is only remembered, for when the
 /// lease ends, and echoed to the controller alone so it reflows its own grid.
 /// Returns the size for the pty if it is to change now.
-pub(super) fn controller_resize(st: &mut PaneState, size: WinSize) -> Option<WinSize> {
+///
+/// Skipping redundant resizes when the pty already has `size` still echoes
+/// `DaemonMsg::Size` via [`resize_state`] so an attaching client reaches the
+/// geometry, while avoiding an unnecessary `ResizePseudoConsole` on Windows
+/// ConPTY (which repaints even when `cols` and `rows` are unchanged; unlike
+/// Unix `TIOCSWINSZ`, ConPTY also ignores cell pixel dimensions).
+pub(super) fn controller_resize(
+    st: &mut PaneState,
+    size: WinSize,
+    pty_ignores_pixels: bool,
+) -> Option<WinSize> {
     if let Some(lease) = &mut st.lease {
         lease.desk = size;
         if let Some(sub) = &st.subscriber {
@@ -247,8 +257,14 @@ pub(super) fn controller_resize(st: &mut PaneState, size: WinSize) -> Option<Win
         }
         return None;
     }
+    let old = st.ring.size();
+    let pty_changed = if pty_ignores_pixels {
+        old.cols != size.cols || old.rows != size.rows
+    } else {
+        old != size
+    };
     resize_state(st, size);
-    Some(size)
+    pty_changed.then_some(size)
 }
 
 /// One gated message to the controller and to every observer.
