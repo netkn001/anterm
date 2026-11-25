@@ -1,0 +1,69 @@
+[package]
+name = "anterm-terminal"
+version.workspace = true
+edition.workspace = true
+description = "GPU-rendered terminal widget, PTY mirror, prompt/completion/history subsystem, and agent composer for anterm"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+anterm-core = { path = "../anterm-core", features = ["gssapi", "remote-install", "history-db"] }
+anterm-editor = { path = "../anterm-editor" }
+anterm-i18n = { path = "../anterm-i18n" }
+anterm-protocol = { path = "../anterm-protocol" }
+anterm-ui-kit = { path = "../anterm-ui-kit" }
+
+gpui-kit.workspace = true
+alacritty_terminal.workspace = true
+
+anyhow.workspace = true
+log.workspace = true
+regex = "1"
+memchr = "2"
+unicode-width = "0.2"
+smol.workspace = true
+smallvec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile = "3"
+url = "2"
+percent-encoding = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+image = "0.25"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSGraphics"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+jieba-rs = "0.10"
+
+[dev-dependencies]
+anterm-ui-kit = { path = "../anterm-ui-kit", features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

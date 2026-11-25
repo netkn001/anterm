@@ -1,0 +1,532 @@
+use std::time::Duration;
+
+use gpui::{
+    Animation, AnimationExt as _, App, Context, KeyDownEvent, div, prelude::*, px,
+};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+
+use crate::core::actions::{NewTab, OpenSettings, ReopenClosedTab, TogglePalette};
+use crate::core::session::{SessionPane, SessionTab};
+use crate::ui::workspace::app::AntermApp;
+use anterm_i18n::{L10nKey, t_fmt};
+
+const LOGO: [&str; 4] = [
+    " ▄▄▄ ▄▄▄  ▄▄▄  ▄▄  ▄▄▄ ▄▄ ▄▄",
+    " ▄▄█ █  █  █  █▄▄█ █▀  █ █ █",
+    "█  █ █  █  █  █    █   █ █ █",
+    "▀▄▄▀ ▀  ▀  ▀▄ ▀▄▄▄ ▀   ▀ ▀ ▀",
+];
+
+const LOGO_PX: f32 = 20.0;
+
+/// What a window with no tabs open can actually do.
+const HOME_SHORTCUTS: [&str; 4] = [
+    "NewTab",
+    "ReopenClosedTab",
+    "TogglePalette",
+    "OpenSettings",
+];
+
+/// The shortcut list under the logo. Rows are the sidebar's 28px step rather
+/// than the old 42px buttons: five of them stacked at that height read as a
+/// wall of controls on a page whose only job is to say "press ⌘T".
+const HOME_LIST_W: f32 = 340.;
+const HOME_ROW_H: f32 = 28.;
+
+/// A row's text inset: its hover fill bleeds this far past the label and the
+/// cap on either side.
+const HOME_ROW_PAD: f32 = 10.;
+
+const CLOSED_LABEL_MAX: usize = 20;
+
+fn closed_tab_label(tab: &SessionTab) -> Option<String> {
+    if let Some(name) = tab.name.as_ref() {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Some(clamp_label(name));
+        }
+    }
+    first_leaf_cwd(&tab.pane)
+        .and_then(|p| p.file_name())
+        .map(|s| clamp_label(&s.to_string_lossy()))
+}
+
+fn first_leaf_cwd(pane: &SessionPane) -> Option<&std::path::PathBuf> {
+    match pane {
+        SessionPane::Leaf { cwd, .. } => cwd.as_ref(),
+        SessionPane::Split { a, b, .. } => first_leaf_cwd(a).or_else(|| first_leaf_cwd(b)),
+    }
+}
+
+fn clamp_label(s: &str) -> String {
+    if s.chars().count() > CLOSED_LABEL_MAX {
+        format!("{}…", s.chars().take(CLOSED_LABEL_MAX).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(test)]
+pub(crate) const PICKER_PATH_MAX: usize = 34;
+
+pub(crate) use anterm_ui_kit::intent::{now_secs, waiting_for};
+#[cfg(test)]
+pub(crate) use anterm_ui_kit::intent::relative_time;
+
+/// `home` belongs to the machine the workspace is on — every row here can
+/// name a directory on another one, and this machine's home says nothing
+/// about those (#580). `None` shows the path in full.
+#[cfg(test)]
+pub(crate) fn display_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    let text = path.to_string_lossy();
+    let text = crate::ui::files::path_display::readable_path(&text);
+    // Same home-abbreviation the Info panel and tab strip use: separators
+    // normalized, case folded (#544).
+    let shortened = crate::ui::files::path_display::abbreviate_home(&text, home).into_owned();
+    if shortened.chars().count() <= PICKER_PATH_MAX {
+        return shortened;
+    }
+    let tail: String = shortened
+        .chars()
+        .skip(shortened.chars().count() - PICKER_PATH_MAX)
+        .collect();
+    format!("…{}", snap_to_separator(&tail))
+}
+
+/// Drops a leading half-component from a front-elided path.
+///
+/// Cutting at a character count lands mid-name as often as not, and the
+/// remainder reads as a directory that exists: "…eeply/nested/projects" offers
+/// "eeply" with the same weight as "nested". A partial name carries no
+/// information the rest of the path does not, so it goes — unless it is the
+/// longer half, which happens when a single component overruns the whole
+/// budget and there is nothing else left to show.
+#[cfg(test)]
+fn snap_to_separator(tail: &str) -> &str {
+    let Some(cut) = tail.find('/') else {
+        return tail;
+    };
+    let (dropped, kept) = tail.split_at(cut);
+    if dropped.is_empty() || dropped.chars().count() <= kept.chars().count() {
+        kept
+    } else {
+        tail
+    }
+}
+
+/// The first keystroke bound to `action`, as a `Keystroke`.
+///
+/// `key_hint` below formats one of these into text. Callers that hand the
+/// chord to a `Tooltip` want the stroke itself: a `Kbd` built from it renders
+/// as a shortcut — a step down in size and colour from the label — where a
+/// formatted string can only be concatenated onto the end of one.
+pub(crate) use anterm_ui_kit::intent::{key_hint, key_stroke};
+
+/// The first stroke of `action`'s binding, one token per key.
+fn key_tokens(action: &str, cx: &App) -> Option<Vec<String>> {
+    let spec = crate::ui::chrome::keymap::effective_key(action, cx)?;
+    let first = spec.split_whitespace().next()?;
+    Some(crate::ui::chrome::keymap::key_tokens(first))
+}
+
+
+
+fn home_shortcut_label(action: &str, closed: Option<&str>) -> String {
+    let label = match action {
+        "NewTab" => anterm_i18n::t(anterm_i18n::L10nKey::HomeNewTab),
+        "ReopenClosedTab" => anterm_i18n::t(anterm_i18n::L10nKey::HomeReopenClosedTab),
+        "TogglePalette" => anterm_i18n::t(anterm_i18n::L10nKey::HomeSearchEverywhere),
+        "SplitRight" => anterm_i18n::t(anterm_i18n::L10nKey::HomeSplitRight),
+        "SplitDown" => anterm_i18n::t(anterm_i18n::L10nKey::HomeSplitDown),
+        "OpenSettings" => anterm_i18n::t(anterm_i18n::L10nKey::HomeSettings),
+        _ => action,
+    };
+    if action == "ReopenClosedTab" {
+        if let Some(name) = closed {
+            return t_fmt(L10nKey::HomeReopenNamed, &[("name", name)]);
+        }
+    }
+    label.to_string()
+}
+
+impl AntermApp {
+    pub(crate) fn render_home(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let (muted, foreground, accent) = (theme.muted_foreground, theme.foreground, theme.primary);
+
+        let mut logo = v_flex()
+            .font_family(cx.global::<crate::core::config::Config>().font_family.clone())
+            .text_size(px(LOGO_PX))
+            .line_height(px(LOGO_PX))
+            .text_color(muted);
+        let (last, head) = LOGO.split_last().expect("LOGO is non-empty");
+        for line in head {
+            logo = logo.child(*line);
+        }
+        // `invisible()` rather than a zero opacity or dropping the child: the
+        // block keeps its width either way, so the logo does not step sideways
+        // twice a second.
+        logo = logo.child(
+            h_flex().child(*last).child(
+                div()
+                    .text_color(accent)
+                    .when(!self.home_cursor_on, |cursor| cursor.invisible())
+                    .child("▌"),
+            ),
+        );
+
+        // In the order ⌘⇧T takes them: the machine's list first, where it
+        // keeps one, then whatever this window kept itself.
+        let next_closed = crate::ui::remote::tree_sync::newest_remembered_close(cx)
+            .or_else(|| self.closed.last().cloned());
+        let closed_hint = next_closed.as_ref().and_then(closed_tab_label);
+        let nothing_to_reopen = next_closed.is_none();
+        // Rows on the sidebar's shape: no fill at rest, the window's hover
+        // rung under the pointer, the chord in a faint cap at the far end.
+        let hover = gpui::rgb(cx.global::<crate::ui::chrome::presets::Surfaces>().window.hover);
+        let mut list = v_flex()
+            .gap(px(2.))
+            .w(px(HOME_LIST_W))
+            .text_size(gpui::rems(crate::ui::files::right_panel::TEXT))
+            .text_color(muted);
+        for action in HOME_SHORTCUTS {
+            if action == "ReopenClosedTab" && nothing_to_reopen {
+                continue;
+            }
+            let emphasized = closed_hint.is_some() && action == "ReopenClosedTab";
+            let label = home_shortcut_label(action, closed_hint.as_deref());
+            list = list.child(
+                h_flex()
+                    .id(action)
+                    .w_full()
+                    .h(px(HOME_ROW_H))
+                    .px(px(HOME_ROW_PAD))
+                    .gap(px(12.))
+                    .items_center()
+                    .justify_between()
+                    .rounded(crate::ui::chrome::rounding::ROW_RADIUS)
+                    .cursor_pointer()
+                    .hover(move |row| row.bg(hover))
+                    .when(emphasized || action == "NewTab", |row| {
+                        row.text_color(foreground)
+                    })
+                    .child(div().min_w_0().truncate().child(label))
+                    .children(key_tokens(action, cx).map(|keys| crate::ui::chrome::dialog::chord(keys, cx)))
+                    .on_click(move |_, window, cx| {
+                        let command: Box<dyn gpui::Action> = match action {
+                            "NewTab" => Box::new(NewTab),
+                            "ReopenClosedTab" => Box::new(ReopenClosedTab),
+                            "TogglePalette" => Box::new(TogglePalette),
+                            "OpenSettings" => Box::new(OpenSettings),
+                            _ => return,
+                        };
+                        window.dispatch_action(command, cx);
+                    }),
+            );
+        }
+
+        let failure = self.startup_error.clone().map(|text| {
+            div()
+                .max_w(px(420.))
+                .text_sm()
+                .text_center()
+                .text_color(cx.theme().danger)
+                .child(text)
+        });
+
+        v_flex()
+            .id("home-page")
+            .track_focus(&self.home_focus)
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap(px(48.))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if this.home_focus.is_focused(window)
+                    && ev.keystroke.key == "enter"
+                    && !ev.keystroke.modifiers.modified()
+                {
+                    this.new_tab(window, cx);
+                }
+            }))
+            .child(logo)
+            .children(failure)
+            .child(list)
+            .with_animation(
+                "home-fade-in",
+                Animation::new(Duration::from_millis(crate::ui::workspace::tab_strip::TRANSITION_MS))
+                    .with_easing(gpui::ease_out_quint()),
+                |page, delta| page.opacity(delta),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anterm_i18n::set_locale;
+    use std::path::PathBuf;
+
+    fn leaf(cwd: Option<&str>) -> SessionPane {
+        SessionPane::Leaf {
+            shell: None,
+            cwd: cwd.map(PathBuf::from),
+            pane_id: None,
+            ssh_spec: None,
+            agent: None,
+            agent_session_id: None,
+            agent_launch_argv: None,
+        }
+    }
+
+    #[test]
+    fn closed_tab_label_prefers_the_user_set_name() {
+        let tab = SessionTab {
+            name: Some("build".into()),
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(Some("/work/getty")),
+        };
+        assert_eq!(closed_tab_label(&tab).as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn closed_tab_label_falls_back_to_the_first_leaf_cwd_dir_name() {
+        let tab = SessionTab {
+            name: None,
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(Some("/work/getty")),
+        };
+        assert_eq!(closed_tab_label(&tab).as_deref(), Some("getty"));
+
+        let tab = SessionTab {
+            name: Some("   ".into()),
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(Some("/work/getty")),
+        };
+        assert_eq!(closed_tab_label(&tab).as_deref(), Some("getty"));
+    }
+
+    #[test]
+    fn closed_tab_label_searches_splits_for_the_first_cwd() {
+        let tab = SessionTab {
+            name: None,
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: SessionPane::Split {
+                axis: crate::core::session::SessionAxis::Horizontal,
+                ratio: 0.5,
+                a: Box::new(leaf(None)),
+                b: Box::new(leaf(Some("/tmp/demo"))),
+            },
+        };
+        assert_eq!(closed_tab_label(&tab).as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn closed_tab_label_is_none_when_nothing_is_known() {
+        let unnamed = SessionTab {
+            name: None,
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(None),
+        };
+        assert_eq!(closed_tab_label(&unnamed), None);
+        let root = SessionTab {
+            name: None,
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(Some("/")),
+        };
+        assert_eq!(closed_tab_label(&root), None);
+    }
+
+    #[test]
+    fn closed_tab_label_clamps_runaway_names() {
+        let tab = SessionTab {
+            name: Some("a".repeat(40)),
+            tree_id: None,
+            tags: Vec::new(),
+            hibernated: false,
+            asleep_view: None,
+            pane: leaf(None),
+        };
+        let label = closed_tab_label(&tab).unwrap();
+        assert_eq!(label.chars().count(), CLOSED_LABEL_MAX + 1);
+        assert!(label.ends_with('…'));
+    }
+
+    #[test]
+    fn relative_time_reads_coarsely_across_the_ranges() {
+        set_locale("en");
+        let now = 10_000_000u64;
+        assert_eq!(relative_time(now, now), "just now");
+        assert_eq!(relative_time(now, now - 30), "just now");
+        assert_eq!(relative_time(now, now - 120), "2 min ago");
+        assert_eq!(relative_time(now, now - 3600), "1 hour ago");
+        assert_eq!(relative_time(now, now - 4 * 3600), "4 hours ago");
+        assert_eq!(relative_time(now, now - 90_000), "yesterday");
+        assert_eq!(relative_time(now, now - 3 * 86_400), "3 days ago");
+        assert_eq!(relative_time(now, now - 10 * 86_400), "1 week ago");
+        assert_eq!(relative_time(now, now - 31 * 86_400), "1 month ago");
+
+        set_locale("zh-CN");
+        assert_eq!(relative_time(now, now - 30), "刚刚");
+        assert_eq!(relative_time(now, now - 120), "2 分钟前");
+        assert_eq!(relative_time(now, now - 3600), "1 小时前");
+        assert_eq!(relative_time(now, now - 90_000), "昨天");
+        set_locale("en");
+    }
+
+    /// Every step of the ladder has to hand off to the next one without
+    /// leaving a gap that rounds down to zero — "0 months ago" is the kind of
+    /// label a coarser boundary produces and nobody notices until it ships.
+    #[test]
+    fn relative_time_never_counts_down_to_zero_between_ranges() {
+        set_locale("en");
+        // Far enough from the epoch that subtracting years stays positive.
+        let now = 400_000_000u64;
+        for days in 7..=400u64 {
+            let label = relative_time(now, now - days * 86_400);
+            assert!(
+                !label.starts_with('0'),
+                "{days} days ago rendered as {label:?}"
+            );
+        }
+        // The handoffs themselves, spelled out.
+        assert_eq!(relative_time(now, now - 6 * 86_400), "6 days ago");
+        assert_eq!(relative_time(now, now - 7 * 86_400), "1 week ago");
+        // Weeks run to a twelfth of a year, so day 30 is still four weeks.
+        assert_eq!(relative_time(now, now - 30 * 86_400), "4 weeks ago");
+        assert_eq!(relative_time(now, now - 31 * 86_400), "1 month ago");
+        assert_eq!(relative_time(now, now - 364 * 86_400), "11 months ago");
+        assert_eq!(relative_time(now, now - 365 * 86_400), "over a year ago");
+        assert_eq!(relative_time(now, now - 3_000 * 86_400), "over a year ago");
+    }
+
+    #[test]
+    fn waiting_age_reads_in_whole_units() {
+        set_locale("en");
+        assert_eq!(waiting_for(0), "waiting <1m");
+        assert_eq!(waiting_for(59), "waiting <1m");
+        assert_eq!(waiting_for(60), "waiting 1m");
+        assert_eq!(waiting_for(3 * 60 + 59), "waiting 3m");
+        assert_eq!(waiting_for(3_600), "waiting 1h");
+        assert_eq!(waiting_for(26 * 3_600), "waiting 1d");
+
+        set_locale("zh-CN");
+        assert_eq!(waiting_for(180), "已等待 3 分钟");
+        set_locale("en");
+    }
+
+    #[test]
+    fn relative_time_never_renders_a_negative_age() {
+        set_locale("en");
+        let now = 1_000_000u64;
+        assert_eq!(relative_time(now, 0), "just now");
+        assert_eq!(relative_time(now, now + 5_000), "just now");
+    }
+
+    #[test]
+    fn display_path_collapses_home_and_elides_from_the_front() {
+        // The home is handed in rather than set in the environment: the row
+        // being drawn may belong to a workspace on another machine, so the
+        // caller names the home and nothing here reads `$HOME` (#580).
+        let home = Some(std::path::Path::new("/Users/tester"));
+        let shown = |p: &str| display_path(std::path::Path::new(p), home);
+
+        assert_eq!(shown("/Users/tester/repo/anterm"), "~/repo/anterm");
+        assert_eq!(shown("/opt/work"), "/opt/work");
+
+        let long = shown("/Users/tester/very/deeply/nested/projects/area/thing");
+        assert!(long.starts_with('…'), "{long} should be front-elided");
+        assert!(long.ends_with("thing"), "{long} must keep the tail");
+        // Snapping to a separator can only shorten what the char budget kept.
+        assert!(long.chars().count() <= PICKER_PATH_MAX + 1);
+
+        // A cut that lands mid-name drops the fragment rather than passing it
+        // off as a directory.
+        let midname = shown("/Users/tester/verylongish/deeply/nested/projects/area/thing");
+        assert_eq!(midname, "…/deeply/nested/projects/area/thing");
+    }
+
+    /// A workspace on another machine is elided the same way, but only its
+    /// own host's home may put a `~` on it (#580).
+    #[test]
+    fn display_path_does_not_measure_another_machine_by_this_one() {
+        let remote = std::path::Path::new("/home/deploy/app");
+        assert_eq!(
+            display_path(remote, Some(std::path::Path::new("/home/deploy"))),
+            "~/app"
+        );
+        assert_eq!(
+            display_path(remote, Some(std::path::Path::new("/Users/tester"))),
+            "/home/deploy/app"
+        );
+        // No link to that host yet, so nothing here knows what `~` is there.
+        assert_eq!(display_path(remote, None), "/home/deploy/app");
+    }
+
+    /// The fragment only goes when the rest of the path can stand without it.
+    #[test]
+    fn a_path_that_is_one_huge_name_keeps_what_it_can() {
+        // Nothing to snap to.
+        assert_eq!(snap_to_separator("abcdefghij"), "abcdefghij");
+        // The fragment is the longer half, so dropping it would leave almost
+        // nothing — better a partial name than "…/ui".
+        assert_eq!(
+            snap_to_separator("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ui"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ui"
+        );
+        // Already on a boundary: nothing is dropped.
+        assert_eq!(snap_to_separator("/src/ui/i18n"), "/src/ui/i18n");
+    }
+
+    #[test]
+    fn every_home_shortcut_ships_with_a_chord_to_show() {
+        let defaults = crate::ui::chrome::keymap::default_bindings();
+        for action in HOME_SHORTCUTS {
+            let key = defaults
+                .iter()
+                .find(|(a, _)| *a == action)
+                .unwrap_or_else(|| panic!("{action} is not a bindable action"))
+                .1;
+            assert!(
+                !key.is_empty(),
+                "{action} has no default chord, so its home row would read as a bare label"
+            );
+        }
+    }
+
+    #[test]
+    fn the_home_list_leaves_out_what_an_empty_window_cannot_do() {
+        for action in ["SplitRight", "SplitDown", "CloseActiveTab", "RenameTab"] {
+            assert!(
+                !HOME_SHORTCUTS.contains(&action),
+                "{action} needs a pane, and the home page is what a window shows without one"
+            );
+        }
+    }
+
+    #[test]
+    fn logo_rows_never_exceed_the_first_row_width() {
+        let width = LOGO[0].chars().count();
+        for row in &LOGO {
+            assert!(row.chars().count() <= width, "row {row:?} exceeds {width}");
+        }
+    }
+}

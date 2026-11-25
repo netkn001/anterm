@@ -1,0 +1,36 @@
+[package]
+name = "anterm-updater"
+version.workspace = true
+edition.workspace = true
+description = "Standalone auto-updater helper binary for anterm (zero GUI dependencies)"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "anterm-updater"
+path = "src/main.rs"
+
+[dependencies]
+anterm-protocol = { path = "../anterm-protocol" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+anterm-core = { path = "../anterm-core" }
+smol.workspace = true
+async_zip = { version = "0.0.19", default-features = false, features = ["deflate"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

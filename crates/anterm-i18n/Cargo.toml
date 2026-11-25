@@ -1,0 +1,13 @@
+[package]
+name = "anterm-i18n"
+version.workspace = true
+edition.workspace = true
+description = "Localization keys, plural rules, and translation tables for anterm (zero GUI dependencies)"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

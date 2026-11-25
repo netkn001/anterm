@@ -1,0 +1,92 @@
+# Pure Cargo virtual workspace for anterm.
+#
+# Thirteen crates live under `crates/` in a strictly acyclic DAG:
+#   Headless core & tools:
+#   - `anterm-protocol`    — leaf wire protocol, framing, updater contracts & shared value types (zero heavy deps)
+#   - `anterm-i18n`        — localization keys, plural rules & translation tables (zero deps)
+#   - `anterm-editor`      — framework-free editor engines: Helix, text/EditorConfig, diff layout, LSP RPC/servers (zero GPUI)
+#   - `anterm-core`        — framework-free session daemon, PTY, SSH engine, remote host & domain model
+#   - `anterm-server`      — headless session server binary (`anterm-server`)
+#   - `anterm-updater`     — standalone auto-updater helper binary (`anterm-updater`, zero GPUI, zero SSH/PTY on Unix)
+#   Desktop GPUI UI layers:
+#   - `anterm-ui-kit`      — shared GPUI foundation: theme, presets, assets, actions, keymap, ConfigStore, host/git caches
+#   - `anterm-terminal`    — GPU-rendered terminal widget, PTY mirror, prompt/history subsystem, and agent composer
+#   - `anterm-remote-ui`   — remote SSH UI panels: port forwards, SFTP browser & host adapter, SSH auth modal
+#   - `anterm-files-ui`    — file tree, git SCM panel & commit graph, diff overlay, panel search, right detail panel
+#   - `anterm-editor-ui`   — built-in code editor workspace, split groups, LSP UI bridge, and document column
+#   - `anterm-settings-ui` — autonomous Settings window and configuration pages
+#   - `anterm-app`         — thin desktop App Shell: startup, multi-window orchestration, tab/split workspace, palette, tray
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = [
+    "crates/anterm-app",
+    "crates/anterm-core",
+    "crates/anterm-editor",
+    "crates/anterm-editor-ui",
+    "crates/anterm-files-ui",
+    "crates/anterm-i18n",
+    "crates/anterm-protocol",
+    "crates/anterm-remote-ui",
+    "crates/anterm-server",
+    "crates/anterm-settings-ui",
+    "crates/anterm-terminal",
+    "crates/anterm-ui-kit",
+    "crates/anterm-updater",
+]
+
+[workspace.package]
+edition = "2024"
+# Single version shared across all thirteen crates via `version.workspace = true`.
+# This is the line a release bump edits (and the one nightly's `awk '/^version = /'` stamps).
+version = "0.1.0"
+repository = "https://github.com/netkn001/anterm"
+license = "MIT"
+
+[workspace.dependencies]
+# GPUI Kit: single unified dependency providing GPUI, GPUI Base, GPUI Component,
+# platform bindings, and default assets. `syntect` provides lightweight syntax
+# highlighting (~200+ languages via TextMate grammars, avoiding tens of MB of
+# statically linked tree-sitter parse tables); semantic features come from LSP.
+gpui-kit = { version = "0.10.0", features = ["syntect"] }
+
+# Official `alacritty_terminal` from crates.io: VT parsing and live grid mirror for `anterm-app`.
+alacritty_terminal = "0.26.0"
+
+anyhow = "1"
+log = "0.4"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+smol = "2"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+type_complexity = "allow"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }
+# The VT parser + grid run on every PTY byte; at opt-level 0 a `cat bigfile`
+# crawls under `cargo dev`.
+alacritty_terminal = { opt-level = 3 }
+
+# Cross-crate inlining across anterm-app <-> alacritty_terminal <-> gpui hot paths.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

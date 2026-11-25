@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/netkn001/anterm/security/advisories/new
+    about: Report security vulnerabilities privately via GitHub Security Advisories.
+  - name: Documentation & Configuration Guide
+    url: https://github.com/netkn001/anterm/blob/main/docs/CONFIGURATION.md
+    about: Check config.json keys, CLI flags, and keybindings before opening an issue.

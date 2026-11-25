@@ -1,0 +1,70 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- anterm (ant + terminal) app icon: deep obsidian Big Sur tile (824pt @1024)
+       framing a geometric ant-head terminal visor with luminous mint prompt and
+       warm amber cursor. Pure vector primitives (resvg/usvg safe). -->
+  <defs>
+    <linearGradient id="tile-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#222631"/>
+      <stop offset="55%" stop-color="#141720"/>
+      <stop offset="100%" stop-color="#0D0F15"/>
+    </linearGradient>
+    <radialGradient id="ambient-glow" cx="50%" cy="52%" r="42%">
+      <stop offset="0%" stop-color="#3FDD8C" stop-opacity="0.14"/>
+      <stop offset="65%" stop-color="#3FDD8C" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#3FDD8C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="visor-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1E232F"/>
+      <stop offset="100%" stop-color="#11141C"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#58F2A5"/>
+      <stop offset="100%" stop-color="#27C478"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FFC55C"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="chassis-stroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F4F3EE"/>
+      <stop offset="100%" stop-color="#C8CCD6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- macOS Big Sur squircle tile -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile-bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#ambient-glow)"/>
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="#FFFFFF" stroke-opacity="0.09" stroke-width="5"/>
+
+  <!-- Geometric Ant x Terminal Emblem -->
+  <g transform="translate(0, 14)">
+    <!-- Swept curved ant antennae -->
+    <path d="M 416 348 C 398 286 382 246 346 226 C 314 208 278 214 250 230"
+          fill="none" stroke="url(#mint)" stroke-width="30" stroke-linecap="round"/>
+    <path d="M 608 348 C 626 286 642 246 678 226 C 710 208 746 214 774 230"
+          fill="none" stroke="url(#mint)" stroke-width="30" stroke-linecap="round"/>
+
+    <!-- Curved geometric mandibles -->
+    <path d="M 382 722 C 392 778 428 806 468 796 C 452 776 446 756 446 730 Z"
+          fill="url(#chassis-stroke)"/>
+    <path d="M 642 722 C 632 778 596 806 556 796 C 572 776 578 756 578 730 Z"
+          fill="url(#chassis-stroke)"/>
+
+    <!-- Geometric ant-head terminal frame -->
+    <path d="M 326 348
+             L 698 348
+             C 752 348 784 384 778 438
+             L 756 644
+             C 750 704 704 744 644 744
+             L 380 744
+             C 320 744 274 704 268 644
+             L 246 438
+             C 240 384 272 348 326 348 Z"
+          fill="url(#visor-bg)" stroke="url(#chassis-stroke)" stroke-width="28" stroke-linejoin="round"/>
+
+    <!-- Terminal prompt ">_" optically centered inside visor -->
+    <path d="M 375 468 L 483 548 L 375 628"
+          fill="none" stroke="url(#mint)" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="529" y="598" width="144" height="44" rx="22" fill="url(#amber)"/>
+  </g>
+</svg>

@@ -1,0 +1,25 @@
+[package]
+name = "anterm-editor"
+version.workspace = true
+edition.workspace = true
+description = "Framework-free editor engines for anterm: Helix modal editing, text decoding/EditorConfig, diff row layout, and LSP JSON-RPC/server registry (zero GUI dependencies)"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+# Pure Rust editor engines — intentionally zero gpui / gpui-component deps so
+# unit tests compile and run in ~1s without a windowing stack.
+[dependencies]
+anterm-protocol = { path = "../anterm-protocol" }
+encoding_rs = "0.8.35"
+globset = "0.4.20"
+log.workspace = true
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

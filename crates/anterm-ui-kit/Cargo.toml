@@ -1,0 +1,87 @@
+[package]
+name = "anterm-ui-kit"
+version.workspace = true
+edition.workspace = true
+description = "Shared GPUI foundation for anterm UI crates: theme, presets, assets, actions, keymap, config store, host/git client services, and chrome primitives"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+anterm-core = { path = "../anterm-core", features = ["gssapi", "remote-install", "history-db"] }
+anterm-editor = { path = "../anterm-editor" }
+anterm-i18n = { path = "../anterm-i18n" }
+anterm-protocol = { path = "../anterm-protocol" }
+
+gpui-kit.workspace = true
+alacritty_terminal.workspace = true
+
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "win-system-proxy",
+    "socks-proxy",
+] }
+url = "2"
+percent-encoding = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+keyring = "4"
+serde_yaml = "0.9"
+plist = "1"
+image = "0.25"
+notify-rust = "4"
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows = { version = "0.58", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Storage_EnhancedStorage",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_Notifications",
+    "implement",
+] }
+windows-core = "0.58"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification"] }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

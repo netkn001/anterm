@@ -1,0 +1,1322 @@
+use gpui::{
+    App, Background, Hsla, Menu, MenuItem, OsAction, Pixels, Point, Styled, SystemMenuType, Window,
+    WindowBackgroundAppearance, linear_color_stop, linear_gradient, point, px, rgb,
+};
+use gpui_kit::base::ScrollbarMode;
+use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
+
+use crate::actions::*;
+use crate::config::{Config, WindowBackdrop};
+use crate::actions::terminal_actions::{
+    ClearScrollback, CopyText, CutText, FindInTerminal, FindNext, FindPrevious, PasteText,
+    RedoEdit, SelectAll, UndoEdit,
+};
+use anterm_i18n::{L10nKey, t};
+use crate::presets;
+use crate::presets::Fill;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
+
+/// Where macOS puts the window's traffic lights over the tab strip: centred on
+/// the row of chrome tiles they share the bar with. `x` matches `y`, as AppKit's
+/// unified toolbar does (19 and 19 in a 52-point bar).
+///
+/// `y` is the gap between the window's top edge and the *top* of the button
+/// frame, and macOS draws those buttons [`TRAFFIC_LIGHT_BUTTON_H`] tall — so the
+/// lights' centre falls half that below it. Deriving the number from
+/// [`crate::window_chrome::title_strip_centre`], the line every title-bar row puts its
+/// contents on, is what keeps the lights on the tile line: the value the 40-point bar needed was
+/// rewritten by hand when the bar grew to 48, without the border in it, and left
+/// the lights half a point — one device pixel on a Retina panel — below
+/// everything beside them.
+pub fn traffic_light_position() -> Point<Pixels> {
+    point(px(TRAFFIC_LIGHT_INSET), px(TRAFFIC_LIGHT_INSET))
+}
+
+/// The height of AppKit's own standard-window-button frame, which is what the
+/// lights are drawn inside. It does not move with the bar's height.
+pub const TRAFFIC_LIGHT_BUTTON_H: f32 = 14.;
+
+// The same content centre drives both the native buttons and the rows beside
+// them. Keep the inset const so the leading reserve can follow it at compile
+// time instead of maintaining a second copy of the bar's border arithmetic.
+const TRAFFIC_LIGHT_INSET: f32 = crate::window_chrome::TITLE_STRIP_CENTRE - TRAFFIC_LIGHT_BUTTON_H / 2.;
+
+/// Close to zoom: three 14-point buttons on a 20-point pitch.
+const TRAFFIC_LIGHTS_W: f32 = 54.;
+
+/// The room the lights take at the bar's leading edge on macOS: their span,
+/// with the inset they sit at on either side.
+pub const TRAFFIC_LIGHTS_LEAD: f32 =
+    TRAFFIC_LIGHT_INSET + TRAFFIC_LIGHTS_W + TRAFFIC_LIGHT_INSET;
+
+pub fn set_menus(cx: &mut App) {
+    cx.set_menus([
+        Menu::new("anterm").items([
+            MenuItem::action(t(L10nKey::AppMenuAbout), About),
+            MenuItem::action(t(L10nKey::AppMenuCheckForUpdates), CheckForUpdates),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuSettings), OpenSettings),
+            MenuItem::separator(),
+            MenuItem::os_submenu(t(L10nKey::AppMenuServices), SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuHideApp), HideApp),
+            MenuItem::action(t(L10nKey::AppMenuHideOthers), HideOthers),
+            MenuItem::action(t(L10nKey::AppMenuShowAll), ShowAll),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuQuit), Quit),
+        ]),
+        Menu::new(t(L10nKey::AppMenuFile)).items([
+            MenuItem::action(t(L10nKey::AppMenuNewTab), NewTab),
+            MenuItem::action(t(L10nKey::CmdNewWindow), NewWindow),
+            MenuItem::separator(),
+            // SSH is one of the reasons to pick anterm and it had no entry in the
+            // menu bar at all — the only routes were ⌘P and Settings, both of
+            // which you have to already know about. Same labels as the palette,
+            // so there is still one name per thing.
+            MenuItem::action(t(L10nKey::CmdSshManageProfiles), OpenSshProfiles),
+            MenuItem::action(t(L10nKey::CmdSshReconnect), RestartSshSession),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuSplitRight), SplitRight),
+            MenuItem::action(t(L10nKey::AppMenuSplitLeft), SplitLeft),
+            MenuItem::action(t(L10nKey::AppMenuSplitDown), SplitDown),
+            MenuItem::action(t(L10nKey::AppMenuSplitUp), SplitUp),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuRenameTab), RenameTab),
+            MenuItem::action(
+                t(L10nKey::AppMenuCopyWorkingDirectory),
+                CopyWorkingDirectory,
+            ),
+            MenuItem::action(t(L10nKey::AppMenuCopySessionId), CopyAgentSessionId),
+            MenuItem::action(t(L10nKey::AppMenuForkSession), ForkAgentSession),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuClosePaneTab), CloseActiveTab),
+            // Where a Mac user looks for the way to put the window away; it
+            // is also the one path that works when another app has taken ⇧⌘W.
+            MenuItem::action(t(L10nKey::CmdCloseWindow), CloseWindow),
+            MenuItem::action(t(L10nKey::AppMenuCloseOtherTabs), CloseOtherTabs),
+            MenuItem::action(t(L10nKey::AppMenuCloseTabsRight), CloseTabsToTheRight),
+            MenuItem::action(t(L10nKey::AppMenuReopenClosedTab), ReopenClosedTab),
+        ]),
+        Menu::new(t(L10nKey::AppMenuEdit)).items([
+            MenuItem::os_action(t(L10nKey::AppMenuUndo), UndoEdit, OsAction::Undo),
+            MenuItem::os_action(t(L10nKey::AppMenuRedo), RedoEdit, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action(t(L10nKey::AppMenuCut), CutText, OsAction::Cut),
+            MenuItem::os_action(t(L10nKey::AppMenuCopy), CopyText, OsAction::Copy),
+            MenuItem::os_action(t(L10nKey::AppMenuPaste), PasteText, OsAction::Paste),
+            MenuItem::os_action(t(L10nKey::AppMenuSelectAll), SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuFind), FindInTerminal),
+            MenuItem::action(t(L10nKey::AppMenuFindNext), FindNext),
+            MenuItem::action(t(L10nKey::AppMenuFindPrevious), FindPrevious),
+        ]),
+        Menu::new(t(L10nKey::AppMenuView)).items([
+            MenuItem::action(t(L10nKey::AppMenuSearchEverywhere), TogglePalette),
+            MenuItem::action(t(L10nKey::CmdGoToFile), QuickOpenFile),
+            MenuItem::action(t(L10nKey::EditorGoToSymbolAction), EditorGoToSymbol),
+            MenuItem::action(t(L10nKey::EditorNavigateBack), EditorNavigateBack),
+            MenuItem::action(t(L10nKey::EditorNavigateForward), EditorNavigateForward),
+            MenuItem::action(t(L10nKey::EditorSplitRight), EditorSplitRight),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuIncreaseFontSize), IncreaseFontSize),
+            MenuItem::action(t(L10nKey::AppMenuDecreaseFontSize), DecreaseFontSize),
+            MenuItem::action(t(L10nKey::AppMenuResetFontSize), ResetFontSize),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuLeftSidebar), ToggleLeftPanel),
+            MenuItem::action(t(L10nKey::AppMenuRightPanel), ToggleRightPanel),
+            MenuItem::action(t(L10nKey::AppMenuCodePanel), ToggleCodePanel),
+            MenuItem::action(t(L10nKey::AppMenuTabBarPosition), ToggleTabSidebar),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::CmdSshRemoteFiles), ToggleSftp),
+            MenuItem::action(t(L10nKey::CmdSshPortForwarding), ShowSshForwards),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuFocusNextPane), FocusNextPane),
+            MenuItem::action(t(L10nKey::AppMenuFocusPreviousPane), FocusPrevPane),
+            // No "Zoom Pane" here. It is bound to ⇧⌘↵, and gpui's macOS menu
+            // builder has no key equivalent for `enter`: it hands AppKit the
+            // literal string "enter", which takes the "e" — so the item drew
+            // itself as ⇧⌘E, which is Code Panel's chord, and pressing it
+            // opened the code panel. A menu item that teaches the wrong key and
+            // points at another command is worse than no menu item. Zoom Pane
+            // keeps its place in ⌘P, in a pane's own menu (drawn by us, with
+            // the right chord), and on the Keybindings page.
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuClearScrollback), ClearScrollback),
+            // No "Enter Full Screen" here: AppKit puts its own at the bottom of
+            // any menu named View, so ours sat directly above it — the same
+            // command twice, under two different shortcuts. ⌘↵ still works and
+            // is listed on the Keybindings page.
+        ]),
+        Menu::new(t(L10nKey::AppMenuWindow)).items(window_menu_items()),
+        Menu::new(t(L10nKey::AppMenuHelp)).items([
+            MenuItem::action(t(L10nKey::AppMenuDocumentation), OpenDocumentation),
+            MenuItem::action(t(L10nKey::AppMenuKeyboardShortcuts), ShowKeyboardShortcuts),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuJoinDiscord), OpenDiscord),
+            MenuItem::action(t(L10nKey::AppMenuReportIssue), ReportIssue),
+            MenuItem::separator(),
+            MenuItem::action(t(L10nKey::AppMenuRestartServer), RestartDaemon),
+        ]),
+    ]);
+}
+
+fn window_menu_items() -> Vec<MenuItem> {
+    vec![
+        MenuItem::action(t(L10nKey::AppMenuMinimize), MinimizeWindow),
+        MenuItem::action(t(L10nKey::AppMenuZoom), ZoomWindow),
+    ]
+}
+
+pub fn window_background(bg: &presets::ActiveBackground) -> Background {
+    window_background_with_alpha(bg, bg.opacity.unwrap_or(1.0))
+}
+
+/// The same preset fill with the alpha channel forced to 1 — used by the
+/// settings overlay, which must stay opaque (workspace translucency must
+/// never show through it) while still rendering the preset's gradient
+/// design instead of collapsing to a flat solid color.
+pub fn window_background_opaque(bg: &presets::ActiveBackground) -> Background {
+    window_background_with_alpha(bg, 1.0)
+}
+
+/// The workspace's own fill: the preset at whatever alpha the window opacity
+/// and backdrop material asked for.
+pub fn workspace_background(cx: &App) -> Background {
+    match cx.try_global::<presets::ActiveBackground>() {
+        Some(bg) => window_background(bg),
+        None => cx.theme().background.into(),
+    }
+}
+
+/// The fill for a full-window overlay (settings, the opened file, the diff
+/// view). Always opaque: the overlay covers the whole workspace, so window
+/// translucency and the backdrop material must stop at it instead of showing
+/// desktop through its text. Overlays pair this with
+/// `app::overlay_surface_layers`, because their own opaque fill hides the
+/// theme background image the workspace root paints beneath them.
+pub fn overlay_background(cx: &App) -> Background {
+    match cx.try_global::<presets::ActiveBackground>() {
+        Some(bg) => window_background_opaque(bg),
+        None => cx.theme().background.alpha(1.0).into(),
+    }
+}
+
+fn window_background_with_alpha(bg: &presets::ActiveBackground, alpha: f32) -> Background {
+    let stop = |c: u32| -> Hsla {
+        let mut h: Hsla = rgb(c).into();
+        h.a = alpha;
+        h
+    };
+    match bg.fill {
+        Fill::Solid(c) => stop(c).into(),
+        Fill::Vertical { top, bottom } => linear_gradient(
+            180.,
+            linear_color_stop(stop(top), 0.),
+            linear_color_stop(stop(bottom), 1.),
+        ),
+        Fill::Horizontal { left, right } => linear_gradient(
+            90.,
+            linear_color_stop(stop(left), 0.),
+            linear_color_stop(stop(right), 1.),
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct SystemAppearance {
+    dark: bool,
+}
+
+impl gpui::Global for SystemAppearance {}
+
+fn is_dark(appearance: gpui::WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+    )
+}
+
+pub fn refresh_system_appearance(cx: &mut App) {
+    let dark = is_dark(cx.window_appearance());
+    cx.set_global(SystemAppearance { dark });
+}
+
+pub fn note_system_appearance(window: &Window, cx: &mut App) {
+    let dark = is_dark(window.appearance());
+    cx.set_global(SystemAppearance { dark });
+}
+
+pub fn system_dark(cx: &App) -> bool {
+    cx.try_global::<SystemAppearance>()
+        .is_some_and(|appearance| appearance.dark)
+}
+
+pub fn effective_preset_id(cx: &App) -> String {
+    let config = cx.global::<Config>();
+    if !config.theme_follow_system {
+        config.theme_preset.clone()
+    } else if system_dark(cx) {
+        config.theme_preset_dark.clone()
+    } else {
+        config.theme_preset_light.clone()
+    }
+}
+
+/// Default background alpha used while a backdrop material is active and
+/// neither the theme nor the config overrides the opacity — a fully opaque
+/// fill would hide the material behind it.
+pub const SYSTEM_MATERIAL_OPACITY: f32 = 0.82;
+
+/// Maps the requested backdrop to the gpui window appearance, falling back
+/// down the chain when the OS build predates a material: Mica needs Windows
+/// 11 22H2 (build 22621), acrylic needs 1809 (build 17763); below that plain
+/// translucency is the best Windows can do. Pure function so the fallback
+/// table is unit-testable on every platform.
+#[cfg(any(target_os = "windows", test))]
+pub fn windows_background_appearance(
+    backdrop: WindowBackdrop,
+    blur: bool,
+    build: u32,
+) -> WindowBackgroundAppearance {
+    match backdrop {
+        WindowBackdrop::Auto => {
+            if blur {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            }
+        }
+        WindowBackdrop::Blur => {
+            if build >= 17_763 {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            }
+        }
+        WindowBackdrop::Mica => {
+            if build >= 22_621 {
+                WindowBackgroundAppearance::MicaBackdrop
+            } else if build >= 17_763 {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            }
+        }
+        WindowBackdrop::MicaAlt => {
+            if build >= 22_621 {
+                WindowBackgroundAppearance::MicaAltBackdrop
+            } else if build >= 17_763 {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            }
+        }
+        WindowBackdrop::Acrylic => {
+            if build >= 17_763 {
+                // Classic WCA / DWM acrylic blur (upstream gpui-kit maps acrylic to Blurred).
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            }
+        }
+        WindowBackdrop::Off => WindowBackgroundAppearance::Transparent,
+    }
+}
+
+/// The backdrop presets actually worth offering on a given Windows build.
+/// Mica, Mica Alt and native acrylic all need Windows 11 22H2 (22621); below
+/// that every one of them collapses onto the same classic WCA blur that
+/// `Blur` already offers, so listing them would present several choices that
+/// render identically — hiding them beats misrepresenting them. Below 1809
+/// (17763) there is no blur API at all, so only plain translucency is left.
+/// Pure function so the table is unit-testable on every platform.
+#[cfg(any(target_os = "windows", test))]
+pub fn supported_backdrops_for(build: u32) -> &'static [WindowBackdrop] {
+    if build >= 22_621 {
+        &[
+            WindowBackdrop::Auto,
+            WindowBackdrop::Blur,
+            WindowBackdrop::Mica,
+            WindowBackdrop::MicaAlt,
+            WindowBackdrop::Off,
+        ]
+    } else if build >= 17_763 {
+        &[
+            WindowBackdrop::Auto,
+            WindowBackdrop::Blur,
+            WindowBackdrop::Off,
+        ]
+    } else {
+        &[WindowBackdrop::Auto, WindowBackdrop::Off]
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn supported_backdrops() -> &'static [WindowBackdrop] {
+    supported_backdrops_for(windows_build_number())
+}
+
+#[cfg(target_os = "windows")]
+pub fn windows_build_number() -> u32 {
+    static BUILD: OnceLock<u32> = OnceLock::new();
+    *BUILD.get_or_init(|| {
+        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+        let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        // RtlGetVersion is not subject to the app-compat version lying that
+        // GetVersionEx is, and unlike GetVersionEx it does not require
+        // dwOSVersionInfoSize to be pre-filled; set it anyway so the call
+        // matches the documented contract.
+        info.dwOSVersionInfoSize = std::mem::size_of_val(&info) as u32;
+        let status = unsafe { RtlGetVersion(&mut info) };
+        if status == 0 {
+            info.dwBuildNumber
+        } else {
+            // Unknown build: treat it as too old, so the fallback chain picks
+            // the most conservative material instead of a silent no-op.
+            0
+        }
+    })
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+pub fn resolved_background_appearance(
+    backdrop: WindowBackdrop,
+    blur: bool,
+) -> WindowBackgroundAppearance {
+    #[cfg(target_os = "windows")]
+    {
+        windows_background_appearance(backdrop, blur, windows_build_number())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // `window_backdrop` is a Windows-only setting and this platform has
+        // no UI to change or clear it (only "Reset window overrides", which
+        // also clobbers opacity). If any variant pinned the appearance
+        // here, the local blur switch would silently show a checked state
+        // that isn't rendered — so every variant, including Off and Blur,
+        // defers to the legacy toggle. (A Windows-synced "off" therefore
+        // does not force transparency on macOS/Linux; the local blur switch
+        // stays authoritative.)
+        if blur {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        }
+    }
+}
+
+/// Whether the resolved backdrop on this platform is actually a material —
+/// i.e. the window content sits over a blur/mica layer instead of plain
+/// transparency. Derived from `resolved_background_appearance` so the
+/// opacity defaulting and the appearance resolution can never disagree: on
+/// very old builds `Blur`/`Acrylic` fall back to `Transparent`, and a
+/// see-through window with no material behind it gets no special opacity.
+///
+/// `Auto` never counts, even when the legacy blur toggle resolves it to
+/// `Blurred`. It is the default for every config written before this
+/// setting existed, and those windows were opaque with opaque sidebars —
+/// treating them as materials would silently turn an untouched install
+/// see-through on first launch after an update. Only an explicit pick in
+/// the backdrop dropdown opts a window into the translucent defaults.
+pub fn material_active(backdrop: WindowBackdrop, blur: bool) -> bool {
+    cfg!(target_os = "windows")
+        && backdrop != WindowBackdrop::Auto
+        && matches!(
+            resolved_background_appearance(backdrop, blur),
+            WindowBackgroundAppearance::Blurred
+                | WindowBackgroundAppearance::MicaBackdrop
+                | WindowBackgroundAppearance::MicaAltBackdrop
+        )
+}
+
+/// The window's background alpha when neither the config nor the theme sets
+/// an explicit opacity: translucent enough to show an active material,
+/// fully opaque otherwise. Single source of truth for `apply_theme` and the
+/// settings slider, so the two can never drift apart.
+pub fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f32 {
+    if material_active(backdrop, blur) {
+        SYSTEM_MATERIAL_OPACITY
+    } else {
+        1.0
+    }
+}
+
+/// The fill for the workspace's large translucent surfaces (file sidebar,
+/// right panel, SFTP panel). While a material is active and the window is
+/// translucent, the surface paints on top of the already-alpha window
+/// background, so its own alpha stacks (src-over) and the material would
+/// show through far less than behind the terminal; a constant 0.15 keeps
+/// the backdrop ratio at ~85% of the terminal's at every opacity setting.
+/// `theme.sidebar` itself stays opaque — the settings theme picker paints
+/// with it on top of the opaque settings overlay and must stay legible.
+pub fn workspace_surface_color(cx: &App) -> Hsla {
+    translucent_surface(cx.theme().sidebar, cx)
+}
+
+/// The left tab rail's fill: the one tinted surface in the workspace (see
+/// `Neutrals::rail`), with the same translucency rule as
+/// [`workspace_surface_color`].
+pub fn rail_surface_color(cx: &App) -> Hsla {
+    let base: Hsla = rgb(cx.global::<presets::Surfaces>().rail.base).into();
+    translucent_surface(base, cx)
+}
+
+fn translucent_surface(base: Hsla, cx: &App) -> Hsla {
+    let translucent = cx
+        .try_global::<presets::ActiveBackground>()
+        .and_then(|bg| bg.opacity)
+        .is_some_and(|o| o < 1.0);
+    if !translucent {
+        return base;
+    }
+    let config = cx.global::<Config>();
+    let theme = presets::by_id(cx, &effective_preset_id(cx));
+    let blur = config.window_blur.unwrap_or(theme.blur);
+    if material_active(config.window_backdrop, blur) {
+        base.alpha(0.15)
+    } else {
+        base
+    }
+}
+
+/// The backdrop presets offered in the settings dropdown: everything the
+/// current build supports, plus the stored value even if it is not
+/// supported here (e.g. Mica synced from a newer machine) — so the label
+/// always matches what the window actually resolves to instead of quietly
+/// showing "Auto" while a fallback appearance is applied.
+#[cfg(target_os = "windows")]
+pub fn backdrop_options(current: WindowBackdrop) -> Vec<WindowBackdrop> {
+    let mut list = supported_backdrops().to_vec();
+    if !list.contains(&current) {
+        list.push(current);
+    }
+    list
+}
+
+/// The window's background alpha: the config override, else the theme's,
+/// else the backdrop's default.
+fn effective_window_opacity(config: &Config, theme: &presets::Theme, blur: bool) -> f32 {
+    config
+        .window_opacity
+        .or(theme.opacity)
+        .unwrap_or_else(|| default_window_opacity(config.window_backdrop, blur))
+}
+
+/// What a window is actually handed: the resolved backdrop, except that on
+/// Windows a fully opaque fill over no DWM material is reported as
+/// `Opaque`.
+///
+/// gpui only rasterizes ClearType (subpixel) glyphs into an `Opaque` window
+/// — subpixel coverage cannot be alpha-blended onto whatever is behind a
+/// translucent one — so asking for `Transparent` (or the WCA blur) while
+/// painting every pixel at alpha 1 silently drops every glyph to grayscale
+/// antialiasing for nothing: nothing behind the window can show through
+/// anyway (#1120). The DWM materials (Mica / Mica Alt / Acrylic) are left as
+/// they are: switching away from one through `Opaque` would not clear the
+/// system backdrop type, and they default to a translucent fill regardless.
+pub fn windows_window_appearance(
+    resolved: WindowBackgroundAppearance,
+    opacity: f32,
+) -> WindowBackgroundAppearance {
+    match resolved {
+        WindowBackgroundAppearance::Transparent | WindowBackgroundAppearance::Blurred
+            if opacity >= 1.0 =>
+        {
+            WindowBackgroundAppearance::Opaque
+        }
+        other => other,
+    }
+}
+
+fn window_appearance(
+    backdrop: WindowBackdrop,
+    blur: bool,
+    opacity: f32,
+) -> WindowBackgroundAppearance {
+    let resolved = resolved_background_appearance(backdrop, blur);
+    if cfg!(target_os = "windows") {
+        windows_window_appearance(resolved, opacity)
+    } else {
+        resolved
+    }
+}
+
+pub fn background_appearance(cx: &App) -> WindowBackgroundAppearance {
+    let config = cx.global::<Config>();
+    let theme = presets::by_id(cx, &effective_preset_id(cx));
+    let blur = config.window_blur.unwrap_or(theme.blur);
+    let opacity = effective_window_opacity(config, &theme, blur);
+    window_appearance(config.window_backdrop, blur, opacity)
+}
+
+/// The appearance last handed to each live window, so `apply_theme` can skip
+/// a `set_background_appearance` that would change nothing.
+///
+/// Worth the bookkeeping because the call is no longer cheap: with a DWM
+/// material selected, gpui answers it by re-setting
+/// `DWMWA_SYSTEMBACKDROP_TYPE` and forcing a non-client frame recalculation
+/// (`SetWindowPos` with `SWP_FRAMECHANGED`). `apply_theme` runs on *every*
+/// `Config` mutation in *every* window, so dragging the opacity slider —
+/// which never changes the appearance — would otherwise recalc the frame
+/// once per mouse-move sample and visibly stutter the drag.
+#[derive(Default)]
+struct AppliedAppearance(std::collections::HashMap<gpui::WindowId, WindowBackgroundAppearance>);
+
+impl gpui::Global for AppliedAppearance {}
+
+/// Records `appearance` for `window` and reports whether it differs from
+/// what that window was last given. Entries for closed windows are dropped
+/// first: window ids come from a slotmap and are reused, so a stale entry
+/// could otherwise suppress the very first call for a brand-new window.
+fn take_appearance_change(
+    window: &Window,
+    appearance: WindowBackgroundAppearance,
+    cx: &mut App,
+) -> bool {
+    let id = window.window_handle().window_id();
+    let live: std::collections::HashSet<gpui::WindowId> =
+        cx.windows().iter().map(|w| w.window_id()).collect();
+    let applied = cx.default_global::<AppliedAppearance>();
+    applied.0.retain(|known, _| live.contains(known));
+    applied.0.insert(id, appearance) != Some(appearance)
+}
+
+/// The interface face gpui-component started out with, read once before
+/// anything overrode it.
+///
+/// [`Theme::change`] only rewrites `font_family` when the theme config names
+/// one, and none of ours does — so a face written into the theme below stays
+/// written for the life of the process. Keeping the stock value here is what
+/// lets **Interface font family → Default** put the system face back on the
+/// spot; without it the setting would save `None`, leave the window looking
+/// exactly as it did, and only come true at the next launch.
+struct StockUiFont(gpui::SharedString);
+
+impl gpui::Global for StockUiFont {}
+
+pub fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
+    let follow = cx.global::<Config>().theme_follow_system;
+    if follow {
+        sync_native_appearance(None);
+        #[cfg(target_os = "macos")]
+        refresh_system_appearance(cx);
+    }
+    let theme = presets::by_id(cx, &effective_preset_id(cx));
+    // Cache the mode beside the machine tree: the daemon is a separate process
+    // and reads it back when it spawns a Windows pane, where ConPTY drops an
+    // OSC 11 background query before anterm's emulator can answer it. Derived
+    // state, so it deliberately stays out of the user's `config.json`.
+    anterm_core::machine::note_appearance(theme.dark);
+    let config = cx.global::<Config>();
+    let mode = if theme.dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    let blur = config.window_blur.unwrap_or(theme.blur);
+    // A material needs some translucency to be visible; without an explicit
+    // opacity override it defaults to SYSTEM_MATERIAL_OPACITY instead of
+    // 1.0. Derived from the *resolved* appearance so old builds where
+    // Blur/Acrylic fall back to plain transparency stay opaque by default.
+    let fill_opacity = effective_window_opacity(config, &theme, blur);
+    let opacity = (fill_opacity < 1.0).then_some(fill_opacity);
+    if !follow {
+        sync_native_appearance(Some(theme.dark));
+    }
+    let m = theme.neutrals();
+    let surfaces = theme.surfaces();
+    let sem = theme.semantics();
+    let interaction = theme.interactions();
+    let active = theme.active_palette(config.theme_legible_palette);
+
+    let backdrop = config.window_backdrop;
+    let ui_font_family = config.ui_font_family.clone();
+    let ui_font_size = config.ui_font_size;
+
+    if let Some(window) = window.as_deref_mut() {
+        let appearance = window_appearance(backdrop, blur, fill_opacity);
+        if take_appearance_change(window, appearance, cx) {
+            window.set_background_appearance(appearance);
+        }
+        // Opacity, blur and backdrop are app-wide settings, but they are
+        // changed from whichever window the settings page is in — its own,
+        // now. Hand the same appearance to every other window too. The one
+        // being updated refuses a nested update, and was handled above.
+        for other in cx.windows() {
+            let _ = other.update(cx, |_, window, cx| {
+                if take_appearance_change(window, appearance, cx) {
+                    window.set_background_appearance(appearance);
+                }
+            });
+        }
+    }
+
+    Theme::change(mode, window.as_deref_mut(), cx);
+    cx.set_global(active);
+    cx.set_global(presets::ActiveBackground {
+        fill: theme.background.clone(),
+        opacity,
+        image: theme.image.clone(),
+    });
+    cx.set_global(surfaces.clone());
+    cx.set_global(interaction);
+    cx.set_global(presets::ActiveAccent(m.accent));
+    // Same treatment as `Surfaces`: derived once here rather than recomputed
+    // in `render`, because the graph reads it once per visible row per frame
+    // and each entry costs a contrast bisection on three surfaces.
+    cx.set_global(presets::ActiveLanes(theme.lanes()));
+
+    if !cx.has_global::<StockUiFont>() {
+        let stock = Theme::global(cx).font_family.clone();
+        cx.set_global(StockUiFont(stock));
+    }
+    let stock = cx.global::<StockUiFont>().0.clone();
+
+    let mut base: Hsla = rgb(m.background).into();
+    if let Some(o) = opacity {
+        base.a = o;
+    }
+    let accent_fill: Hsla = rgb(interaction.choice).into();
+    let accent_text: Hsla = rgb(interaction.choice_ink).into();
+    let primary_base: Hsla = rgb(interaction.primary.fill).into();
+    let primary_hover: Hsla = rgb(interaction.primary_hover).into();
+    let primary_active: Hsla = rgb(interaction.primary_pressed).into();
+    let primary_text: Hsla = rgb(interaction.primary.on_fill).into();
+
+    let steps = |c: u32| {
+        (
+            Hsla::from(rgb(c)),
+            Hsla::from(rgb(presets::mix(c, m.background, 0.15))),
+            Hsla::from(rgb(presets::mix(c, m.foreground, 0.15))),
+        )
+    };
+    let (danger_ink, danger_ink_hover, danger_ink_active) = steps(sem.danger.ink);
+    let (danger_fill, danger_fill_hover, danger_fill_active) = steps(sem.danger.fill);
+    let danger_on_fill = Hsla::from(rgb(sem.danger.on_fill));
+
+    let (warning_ink, warning_ink_hover, warning_ink_active) = steps(sem.warning.ink);
+    let (warning_fill, warning_fill_hover, warning_fill_active) = steps(sem.warning.fill);
+    let warning_on_fill = Hsla::from(rgb(sem.warning.on_fill));
+
+    let (success_ink, success_ink_hover, success_ink_active) = steps(sem.success.ink);
+    let (success_fill, success_fill_hover, success_fill_active) = steps(sem.success.fill);
+    let success_on_fill = Hsla::from(rgb(sem.success.on_fill));
+
+    let (info_ink, info_ink_hover, info_ink_active) = steps(sem.info.ink);
+    let (info_fill, info_fill_hover, info_fill_active) = steps(sem.info.fill);
+    let info_on_fill = Hsla::from(rgb(sem.info.on_fill));
+
+    let knob = if presets::is_lighter(m.background, m.foreground) {
+        m.background
+    } else {
+        m.foreground
+    };
+    let scrollbar_thumb: Hsla = rgb(presets::mix(m.background, m.foreground, 0.18)).into();
+    let scrollbar_thumb_hover: Hsla = rgb(presets::mix(m.background, m.foreground, 0.34)).into();
+    let sidebar_bg = Hsla::from(rgb(m.sidebar));
+    // The current tab is a place, not an action: a neutral step of the rail's
+    // own ladder plus a heavier title, never the accent. Blue is left to the
+    // things that can be pressed.
+    let sidebar_sel: Hsla = rgb(surfaces.sidebar.selected).into();
+    let button_hover: Hsla = rgb(surfaces.window.hover).into();
+    let button_active: Hsla = rgb(surfaces.window.selected).into();
+    let ink: Hsla = rgb(m.foreground).into();
+
+    // Update the global theme through `Theme::update` so `colors`, `tokens`,
+    // the `gpui-base` projection (`Theme::sync_base`), and every window stay in
+    // step automatically.
+    Theme::update(cx, |t| {
+        // Assigned in both directions, never only when set: this is the one
+        // place that decides the chrome's face, so it has to say "back to
+        // stock" as plainly as it says "use Inter".
+        t.font_family = match ui_font_family {
+            Some(family) if !family.trim().is_empty() => family.into(),
+            _ => stock,
+        };
+        // `Root`'s `prepare` hook applies `window.set_rem_size(cx.theme().font_size)`
+        // before rendering both the main surface and every overlay layer.
+        t.font_size = px(ui_font_size);
+
+        t.background = base;
+        t.foreground = rgb(m.foreground).into();
+        t.border = rgb(m.border).into();
+        t.secondary = rgb(m.secondary).into();
+        t.secondary_hover = button_hover;
+        t.secondary_active = button_active;
+        // Ink, not fill. gpui-component resolves both of these from its *stock*
+        // foreground, so a button's label and the detail panel's section headings
+        // were the only text in the window not written in the preset's own colour.
+        t.button_foreground = rgb(m.foreground).into();
+        t.secondary_foreground = rgb(m.foreground).into();
+        t.muted = rgb(m.muted).into();
+        t.muted_foreground = rgb(m.muted_foreground).into();
+
+        t.button = rgb(m.popover).into();
+        t.button_hover = button_hover;
+        t.button_active = button_active;
+        t.button_secondary = rgb(m.secondary).into();
+        t.button_secondary_hover = button_hover;
+        t.button_secondary_active = button_active;
+        t.button_secondary_foreground = rgb(m.foreground).into();
+
+        t.popover = rgb(m.popover).into();
+        t.popover_foreground = rgb(m.foreground).into();
+
+        t.accent = accent_fill;
+        t.accent_foreground = accent_text;
+
+        t.primary = primary_base;
+        t.primary_hover = primary_hover;
+        t.primary_active = primary_active;
+        t.primary_foreground = primary_text;
+        t.button_primary = primary_base;
+        t.button_primary_hover = primary_hover;
+        t.button_primary_active = primary_active;
+        t.button_primary_foreground = primary_text;
+
+        t.danger = danger_ink;
+        t.danger_hover = danger_ink_hover;
+        t.danger_active = danger_ink_active;
+        t.danger_foreground = danger_on_fill;
+        t.button_danger = danger_fill;
+        t.button_danger_hover = danger_fill_hover;
+        t.button_danger_active = danger_fill_active;
+        t.button_danger_foreground = danger_on_fill;
+
+        t.warning = warning_ink;
+        t.warning_hover = warning_ink_hover;
+        t.warning_active = warning_ink_active;
+        t.warning_foreground = warning_on_fill;
+        t.button_warning = warning_fill;
+        t.button_warning_hover = warning_fill_hover;
+        t.button_warning_active = warning_fill_active;
+        t.button_warning_foreground = warning_on_fill;
+
+        t.success = success_ink;
+        t.success_hover = success_ink_hover;
+        t.success_active = success_ink_active;
+        t.success_foreground = success_on_fill;
+        t.button_success = success_fill;
+        t.button_success_hover = success_fill_hover;
+        t.button_success_active = success_fill_active;
+        t.button_success_foreground = success_on_fill;
+
+        t.info = info_ink;
+        t.info_hover = info_ink_hover;
+        t.info_active = info_ink_active;
+        t.info_foreground = info_on_fill;
+        t.button_info = info_fill;
+        t.button_info_hover = info_fill_hover;
+        t.button_info_active = info_fill_active;
+        t.button_info_foreground = info_on_fill;
+
+        // The command-line highlighter paints commands, flags, paths, strings
+        // and operators with these, and the find bar flags a bad regex with
+        // `red`. Unset they hold gpui-component's stock ramp.
+        t.red = rgb(theme.ansi_ink(1)).into();
+        t.green = rgb(theme.ansi_ink(2)).into();
+        t.yellow = rgb(theme.ansi_ink(3)).into();
+        t.blue = rgb(theme.ansi_ink(4)).into();
+        t.magenta = rgb(theme.ansi_ink(5)).into();
+        t.cyan = rgb(theme.ansi_ink(6)).into();
+
+        t.link = rgb(sem.link.ink).into();
+        t.link_hover = rgb(presets::mix(sem.link.ink, m.foreground, 0.25)).into();
+        t.link_active = rgb(presets::mix(sem.link.ink, m.background, 0.20)).into();
+
+        t.switch = rgb(surfaces.window.selected).into();
+        t.switch_thumb = rgb(knob).into();
+
+        // On-switches, sliders and primary actions share the accent role.
+        t.slider_bar = rgb(m.accent).into();
+        t.slider_thumb = rgb(knob).into();
+
+        t.caret = rgb(m.caret).into();
+        t.selection = rgb(m.selection).into();
+
+        t.scrollbar = gpui::transparent_black();
+        t.scrollbar_thumb = scrollbar_thumb;
+        t.scrollbar_thumb_hover = scrollbar_thumb_hover;
+
+        // Not `should_auto_hide_scrollbars()`. Ours are overlay bars painted on
+        // top of the content, so every list in the app gets the same fading bar.
+        t.scrollbar_mode = ScrollbarMode::Scrolling;
+
+        t.radius = px(8.);
+
+        // Flat controls, floating panels (`Theme::shadow` only gates inline
+        // control `shadow_xs`, never floating popovers/menus/tooltips).
+        t.shadow = false;
+
+        // `t.sidebar` stays the opaque theme token; translucent workspace
+        // variants are computed at render time via `workspace_surface_color`.
+        t.sidebar = sidebar_bg;
+        // The lighter tier: every `sidebar_border` site is a pane meeting
+        // another pane, and both already carry their own fill.
+        t.sidebar_border = rgb(m.divider).into();
+        t.sidebar_foreground = rgb(surfaces.sidebar.text_resting).into();
+        t.sidebar_accent = sidebar_sel;
+        t.sidebar_accent_foreground = rgb(surfaces.sidebar.text_selected).into();
+
+        t.list.active_highlight = true;
+        t.list_active = rgb(interaction.choice).into();
+        t.list_active_border = rgb(interaction.choice).into();
+        t.list_hover = rgb(surfaces.popover.hover).into();
+
+        // gpui-component's `input` is the border role, also used by default
+        // buttons. Giving it the field background would erase their outlines.
+        t.input = rgb(interaction.input_border).into();
+
+        t.ring = rgb(m.accent).into();
+        t.drag_border = rgb(m.accent).into();
+
+        // Clear the syntax theme's stock opaque gutter/background so the code
+        // panel sits cleanly over custom window fills, gradients, and images.
+        let mut highlight = (*t.highlight_theme).clone();
+        highlight.style.editor_background = Some(gpui::transparent_black());
+        highlight.style.editor_gutter_background = Some(gpui::transparent_black());
+        highlight.style.editor_active_line = Some(ink.opacity(0.06));
+        highlight.style.editor_line_number = Some(rgb(m.muted_foreground).into());
+        highlight.style.editor_active_line_number = Some(ink);
+        highlight.style.editor_invisible = Some(ink.opacity(0.25));
+        t.highlight_theme = std::sync::Arc::new(highlight);
+    });
+
+    #[cfg(target_os = "macos")]
+    if let Some(window) = window.as_deref_mut() {
+        window.set_traffic_light_position(traffic_light_position());
+    }
+}
+
+/// Updates the global GPUI Component base font size (application rem zoom)
+/// through [`Theme::update`] so `Root`'s `prepare` hook applies the new rem
+/// scale to every open window and overlay layer.
+pub fn apply_ui_font_size(size: f32, cx: &mut App) {
+    let target = px(size);
+    if Theme::global(cx).font_size == target {
+        return;
+    }
+    Theme::update(cx, |theme| {
+        theme.font_size = target;
+    });
+}
+
+/// Shared opaque floating surface. In-window GPUI layers cannot blur the
+/// terminal beneath them, so depth comes from the edge and shadow instead.
+pub fn floating_surface<T: Styled>(element: T, cx: &App) -> T {
+    let theme = cx.theme();
+    element
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .border_1()
+        .border_color(theme.border.opacity(0.65))
+        .rounded(crate::rounding::POPOVER_RADIUS)
+        .shadow_xl()
+}
+
+/// One device pixel: the v4 hairline, 0.5px on a Retina panel and a whole
+/// pixel on a 1x one. A literal `px(0.5)` would be antialiased down to half
+/// its ink on a 1x display, under the contrast floor `divider` is held to.
+pub fn hairline(window: &Window) -> Pixels {
+    px(1. / window.scale_factor().max(1.))
+}
+
+/// Tabular figures, so a column of counts, sizes and positions keeps its
+/// digits on one grid while the numbers change under it.
+pub fn tabular_figures() -> gpui::FontFeatures {
+    gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]))
+}
+
+/// The v4 primary button: an inverted neutral — body ink as the fill, the
+/// surface it sits on as the label — rather than the accent, which stays with
+/// focus and the things that are on. `surface` is the opaque fill under the
+/// button, so the label reads as cut out of it. Disabled, gpui-component
+/// drops the fill to 15% of itself, the faint well the rest of v4 uses.
+pub fn inverted_button(
+    surface: Hsla,
+    cx: &App,
+) -> gpui_kit::component::button::ButtonCustomVariant {
+    let ink = cx.theme().foreground;
+    gpui_kit::component::button::ButtonCustomVariant::new(cx)
+        .color(ink)
+        .foreground(surface)
+        .hover(ink.blend(surface.opacity(0.14)))
+        .active(ink.blend(surface.opacity(0.24)))
+}
+
+pub fn apply_cursor_hide_mode(cx: &mut App) {
+    let mode = if cx.global::<Config>().mouse_hide_while_typing {
+        gpui::CursorHideMode::OnTypingAndAction
+    } else {
+        gpui::CursorHideMode::Never
+    };
+    cx.set_cursor_hide_mode(mode);
+}
+
+#[cfg(target_os = "macos")]
+fn sync_native_appearance(dark: Option<bool>) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+    };
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let appearance = dark.and_then(|dark| {
+        let name = unsafe {
+            if dark {
+                NSAppearanceNameDarkAqua
+            } else {
+                NSAppearanceNameAqua
+            }
+        };
+        NSAppearance::appearanceNamed(name)
+    });
+    NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_native_appearance(_dark: Option<bool>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    /// The lights share a line with the chrome tiles they sit beside. gpui
+    /// hangs the top of the button frame `y` below the window's top edge, so
+    /// their centre falls half a frame under that, and `title_strip_centre` is
+    /// where every title-bar row puts its contents. Sixteen and a half points
+    /// today, out of the 48pt bar.
+    #[test]
+    fn the_traffic_lights_sit_on_the_chrome_rows_centre() {
+        let position = traffic_light_position();
+        assert_eq!(position.x, position.y);
+        assert_eq!(
+            position.y + px(TRAFFIC_LIGHT_BUTTON_H / 2.),
+            crate::window_chrome::title_strip_centre()
+        );
+    }
+
+    /// The strip, editor header and search band start at the lead, so the
+    /// lights have to end, with their inset after them, before it does.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_title_bar_lead_clears_the_traffic_lights() {
+        let right = traffic_light_position().x + px(TRAFFIC_LIGHTS_W);
+        assert!(right + px(TRAFFIC_LIGHT_INSET) <= px(crate::window_chrome::TITLE_BAR_LEAD));
+    }
+
+    #[gpui::test]
+    fn effective_preset_follows_the_cached_system_appearance(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Config(crate::config::CoreConfig {
+                theme_follow_system: true,
+                theme_preset_light: "light-slot".into(),
+                theme_preset_dark: "dark-slot".into(),
+                ..Default::default()
+            }));
+
+            cx.set_global(SystemAppearance { dark: false });
+            assert!(!system_dark(cx));
+            assert_eq!(effective_preset_id(cx), "light-slot");
+
+            cx.set_global(SystemAppearance { dark: true });
+            assert!(system_dark(cx));
+            assert_eq!(effective_preset_id(cx), "dark-slot");
+
+            cx.global_mut::<Config>().theme_follow_system = false;
+            assert_eq!(effective_preset_id(cx), Config::default().theme_preset);
+        });
+    }
+
+    #[gpui::test]
+    fn apply_theme_syncs_font_size_tokens_and_base_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut cfg = Config::default();
+            cfg.ui_font_size = 18.0;
+            cx.set_global(cfg);
+            crate::presets::load_registry(cx);
+
+            apply_theme(None, cx);
+
+            let theme = Theme::global(cx);
+            assert_eq!(theme.font_size, px(18.0));
+            // `Theme::update` reconciles `colors` into `tokens` and runs `sync_base`.
+            assert_eq!(theme.tokens.foreground.color, theme.foreground);
+            assert_eq!(theme.tokens.button_danger.color, theme.button_danger);
+            let base = cx.global::<gpui_kit::base::Theme>();
+            assert_eq!(base.tokens, theme.semantic_tokens());
+
+            apply_ui_font_size(15.0, cx);
+            assert_eq!(Theme::global(cx).font_size, px(15.0));
+        });
+    }
+
+    #[test]
+    fn an_opaque_windows_fill_keeps_cleartype() {
+        use WindowBackgroundAppearance::*;
+        // A fully opaque fill shows nothing behind the window, so plain
+        // translucency or the WCA blur only cost ClearType (#1120).
+        assert_eq!(windows_window_appearance(Transparent, 1.0), Opaque);
+        assert_eq!(windows_window_appearance(Blurred, 1.0), Opaque);
+        // Anything see-through keeps what it asked for.
+        assert_eq!(windows_window_appearance(Transparent, 0.9), Transparent);
+        assert_eq!(windows_window_appearance(Blurred, 0.82), Blurred);
+        // DWM materials are never routed through Opaque.
+        for material in [MicaBackdrop, MicaAltBackdrop] {
+            assert_eq!(windows_window_appearance(material, 1.0), material);
+        }
+        // The untouched default — Auto, no blur, no opacity override — is the
+        // case the report hit: it must come out opaque.
+        let resolved =
+            windows_background_appearance(crate::config::WindowBackdrop::Auto, false, 22_621);
+        let opacity = default_window_opacity(crate::config::WindowBackdrop::Auto, false);
+        assert_eq!(windows_window_appearance(resolved, opacity), Opaque);
+    }
+
+    #[test]
+    fn windows_background_appearance_falls_back_by_build() {
+        use crate::config::WindowBackdrop;
+        let a = |b: WindowBackdrop, blur: bool, build: u32| {
+            windows_background_appearance(b, blur, build)
+        };
+
+        // Auto keeps the legacy blur/translucent choice.
+        assert_eq!(
+            a(WindowBackdrop::Auto, false, 22_621),
+            WindowBackgroundAppearance::Transparent
+        );
+        assert_eq!(
+            a(WindowBackdrop::Auto, true, 17_763),
+            WindowBackgroundAppearance::Blurred
+        );
+
+        // Blur explicitly requests the classic blurred appearance from 1809
+        // on; older builds get plain translucency.
+        assert_eq!(
+            a(WindowBackdrop::Blur, false, 17_763),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::Blur, true, 17_762),
+            WindowBackgroundAppearance::Transparent
+        );
+
+        // Mica needs Windows 11 22H2; 1809..22H2 falls back to classic
+        // acrylic, and below 1809 there is no blur API to fall back to —
+        // asking for one there would leave an unbacked see-through window.
+        assert_eq!(
+            a(WindowBackdrop::Mica, false, 22_621),
+            WindowBackgroundAppearance::MicaBackdrop
+        );
+        assert_eq!(
+            a(WindowBackdrop::Mica, false, 22_620),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::Mica, false, 17_762),
+            WindowBackgroundAppearance::Transparent
+        );
+        assert_eq!(
+            a(WindowBackdrop::MicaAlt, false, 26_000),
+            WindowBackgroundAppearance::MicaAltBackdrop
+        );
+        assert_eq!(
+            a(WindowBackdrop::MicaAlt, false, 17_763),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::MicaAlt, false, 17_762),
+            WindowBackgroundAppearance::Transparent
+        );
+        // A failed RtlGetVersion reports build 0; every material must degrade
+        // to plain translucency there rather than request an unsupported one.
+        for backdrop in [
+            WindowBackdrop::Blur,
+            WindowBackdrop::Mica,
+            WindowBackdrop::MicaAlt,
+            WindowBackdrop::Acrylic,
+        ] {
+            assert_eq!(
+                a(backdrop, false, 0),
+                WindowBackgroundAppearance::Transparent,
+                "{backdrop:?} on an unknown build must not request a material"
+            );
+        }
+
+        // Acrylic uses the native DWMSBT_TRANSIENTWINDOW material on 22H2+,
+        // classic WCA acrylic from 1809 on, plain translucency below that.
+        assert_eq!(
+            a(WindowBackdrop::Acrylic, false, 22_621),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::Acrylic, false, 22_620),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::Acrylic, false, 17_763),
+            WindowBackgroundAppearance::Blurred
+        );
+        assert_eq!(
+            a(WindowBackdrop::Acrylic, false, 17_762),
+            WindowBackgroundAppearance::Transparent
+        );
+
+        // Off never requests a material.
+        assert_eq!(
+            a(WindowBackdrop::Off, false, 26_000),
+            WindowBackgroundAppearance::Transparent
+        );
+        assert_eq!(
+            a(WindowBackdrop::Off, true, 26_000),
+            WindowBackgroundAppearance::Transparent
+        );
+    }
+
+    #[test]
+    fn auto_never_counts_as_a_material() {
+        use crate::config::WindowBackdrop;
+        // Every config written before this setting existed carries `Auto`,
+        // and many of them carry `window_blur: true` from the old switch.
+        // Those windows were opaque, with opaque sidebars — an update must
+        // not silently turn them see-through, so `Auto` gets the plain 1.0
+        // default no matter which way the legacy toggle points.
+        for blur in [false, true] {
+            assert!(!material_active(WindowBackdrop::Auto, blur));
+            assert_eq!(default_window_opacity(WindowBackdrop::Auto, blur), 1.0);
+        }
+        // `Off` is an explicit "no material" and must behave the same.
+        assert!(!material_active(WindowBackdrop::Off, true));
+        assert_eq!(default_window_opacity(WindowBackdrop::Off, true), 1.0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_explicitly_picked_material_lowers_the_default_opacity() {
+        use crate::config::WindowBackdrop;
+        // The counterpart to the check above: opting in through the dropdown
+        // is what buys the translucent default, on a build that supports it.
+        if windows_build_number() < 22_621 {
+            return;
+        }
+        for backdrop in [
+            WindowBackdrop::Blur,
+            WindowBackdrop::Mica,
+            WindowBackdrop::MicaAlt,
+            WindowBackdrop::Acrylic,
+        ] {
+            assert!(material_active(backdrop, false), "{backdrop:?}");
+            assert_eq!(
+                default_window_opacity(backdrop, false),
+                SYSTEM_MATERIAL_OPACITY,
+                "{backdrop:?}"
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn non_windows_backdrop_defers_to_the_local_blur_toggle() {
+        use crate::config::WindowBackdrop;
+        // On non-Windows, `window_backdrop` is a Windows-only setting with
+        // no local UI to clear it; every variant must defer to the local
+        // blur toggle so the switch's checked state always matches what is
+        // actually rendered.
+        for backdrop in [
+            WindowBackdrop::Auto,
+            WindowBackdrop::Blur,
+            WindowBackdrop::Mica,
+            WindowBackdrop::MicaAlt,
+            WindowBackdrop::Acrylic,
+            WindowBackdrop::Off,
+        ] {
+            assert_eq!(
+                resolved_background_appearance(backdrop, true),
+                WindowBackgroundAppearance::Blurred,
+                "{backdrop:?} with blur on should resolve to Blurred"
+            );
+            assert_eq!(
+                resolved_background_appearance(backdrop, false),
+                WindowBackgroundAppearance::Transparent,
+                "{backdrop:?} with blur off should resolve to Transparent"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_backdrops_follow_the_build() {
+        use crate::config::WindowBackdrop;
+        assert_eq!(
+            supported_backdrops_for(22_621),
+            &[
+                WindowBackdrop::Auto,
+                WindowBackdrop::Blur,
+                WindowBackdrop::Mica,
+                WindowBackdrop::MicaAlt,
+                WindowBackdrop::Off,
+            ]
+        );
+        // Pre-22H2: Mica, Mica Alt and Acrylic all collapse onto the very
+        // same classic WCA blur that `Blur` already offers, so the dropdown
+        // hides them rather than listing choices that render identically.
+        assert_eq!(
+            supported_backdrops_for(22_620),
+            &[
+                WindowBackdrop::Auto,
+                WindowBackdrop::Blur,
+                WindowBackdrop::Off,
+            ]
+        );
+        assert_eq!(
+            supported_backdrops_for(17_763),
+            &[
+                WindowBackdrop::Auto,
+                WindowBackdrop::Blur,
+                WindowBackdrop::Off,
+            ]
+        );
+        // Every offered preset must resolve to a distinct appearance, or the
+        // dropdown is promising a difference the window cannot deliver.
+        // `Auto` is exempt: it has no fixed appearance of its own, it mirrors
+        // whichever way the blur toggle happens to be set.
+        for build in [22_621, 22_620, 17_763, 17_762] {
+            let offered: Vec<_> = supported_backdrops_for(build)
+                .iter()
+                .copied()
+                .filter(|b| *b != WindowBackdrop::Auto)
+                .collect();
+            for (i, a) in offered.iter().enumerate() {
+                for b in &offered[i + 1..] {
+                    assert_ne!(
+                        windows_background_appearance(*a, false, build),
+                        windows_background_appearance(*b, false, build),
+                        "build {build}: {a:?} and {b:?} render identically"
+                    );
+                }
+            }
+        }
+        // Below 1809 there is no blur API at all; only plain translucency.
+        assert_eq!(
+            supported_backdrops_for(17_762),
+            &[WindowBackdrop::Auto, WindowBackdrop::Off]
+        );
+    }
+}
+
+/// The text view's style for rendered Markdown, wherever anterm shows it.
+///
+/// Inline `code` gets a faint neutral fill. The text view's own default is the
+/// theme's `accent`, which anterm also paints selection with, so every code span
+/// read as selected text.
+pub fn markdown_style(cx: &gpui::App) -> gpui_kit::component::text::TextViewStyle {
+    gpui_kit::component::text::TextViewStyle::default().inline_code(gpui::HighlightStyle {
+        background_color: Some(cx.theme().foreground.opacity(0.08)),
+        ..Default::default()
+    })
+}

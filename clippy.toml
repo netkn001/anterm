@@ -1,0 +1,3 @@
+# Idiomatic `.unwrap()` is allowed in unit/integration test suites while
+# production code across all 13 workspace crates enforces `unwrap_used = "deny"`.
+allow-unwrap-in-tests = true

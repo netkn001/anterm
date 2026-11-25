@@ -1,0 +1,32 @@
+[package]
+name = "anterm-files-ui"
+version.workspace = true
+edition.workspace = true
+description = "File tree, git SCM panel & commit graph, diff overlay, panel content search, and right detail panel for anterm"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anterm-core = { path = "../anterm-core", features = ["gssapi", "remote-install", "history-db"] }
+anterm-editor = { path = "../anterm-editor" }
+anterm-i18n = { path = "../anterm-i18n" }
+anterm-protocol = { path = "../anterm-protocol" }
+anterm-remote-ui = { path = "../anterm-remote-ui" }
+anterm-ui-kit = { path = "../anterm-ui-kit" }
+
+gpui-kit.workspace = true
+anyhow.workspace = true
+log.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+anterm-ui-kit = { path = "../anterm-ui-kit", features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

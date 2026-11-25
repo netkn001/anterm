@@ -1,0 +1,26 @@
+[package]
+name = "anterm-protocol"
+version.workspace = true
+edition.workspace = true
+description = "Lightweight wire protocol, framing, updater contracts, and leaf domain types shared across all anterm crates"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+# Intentionally tiny dependency surface: NO gpui, NO russh, NO tokio, NO
+# portable-pty, NO notify, NO gix. Lightweight binaries like
+# `anterm-updater` and pure engines like `anterm-editor` depend on this crate
+# without pulling in the heavy server or GUI stacks.
+[dependencies]
+base64 = "0.22"
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

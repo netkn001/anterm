@@ -1,0 +1,64 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in anterm
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please check existing issues first and avoid including secrets, SSH private keys, or personal tokens in logs.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what happened vs. what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Launch anterm
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS (Apple Silicon / arm64)
+        - macOS (Intel / x86_64)
+        - Linux (x86_64)
+        - Linux (arm64)
+        - Windows (x64)
+        - Windows (ARM64)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: anterm Version / Commit
+      placeholder: "e.g. 0.1.0 or commit hash"
+    validations:
+      required: true
+
+  - type: input
+    id: shell
+    attributes:
+      label: Shell & Environment
+      placeholder: "e.g. zsh 5.9, bash 5.2, fish 3.7, PowerShell 7.4, WSL2"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, Screenshots, or Config Snippet
+      description: Attach screenshots or relevant log lines (redact any private hostnames or paths if needed).
+      render: shell
