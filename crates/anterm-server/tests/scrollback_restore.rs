@@ -402,18 +402,24 @@ fn clear_scrollback_wipes_daemon_replay_and_disk_snapshot() {
     let pane_id = session.pane_id();
 
     let secret = b"anterm_sensitive_secret_line";
-    session
-        .input(format!("echo {}\r", String::from_utf8_lossy(secret)).as_bytes())
-        .expect("write secret line");
+    // Split the literal so TTY input echo cannot match `secret` before the
+    // shell actually executes the command and prints its output.
+    #[cfg(unix)]
+    let secret_cmd = b"printf '%s%s\n' anterm_sensitive_ secret_line\r";
+    #[cfg(windows)]
+    let secret_cmd = b"echo anterm_sensitive_^secret_line\r";
+    session.input(secret_cmd).expect("write secret line");
     collect_until(&mut session, secret);
 
     // Clear scrollback on the daemon and emit a fresh post-clear marker so we
     // can synchronize on the stream before reattaching.
     session.clear_scrollback().expect("send ClearScrollback");
     let after = b"anterm_after_clear_marker";
-    session
-        .input(format!("echo {}\r", String::from_utf8_lossy(after)).as_bytes())
-        .expect("write post-clear marker");
+    #[cfg(unix)]
+    let after_cmd = b"printf '%s%s\n' anterm_after_ clear_marker\r";
+    #[cfg(windows)]
+    let after_cmd = b"echo anterm_after_^clear_marker\r";
+    session.input(after_cmd).expect("write post-clear marker");
     collect_until(&mut session, after);
     session.detach().expect("detach");
 

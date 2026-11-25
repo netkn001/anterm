@@ -48,7 +48,8 @@ jobs:
             libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libwayland-dev libfontconfig1-dev libfreetype6-dev \
-            libvulkan-dev libasound2-dev libssl-dev
+            libvulkan-dev libasound2-dev libssl-dev \
+            libkrb5-dev libclang-dev
 
       - name: Workspace check (all targets & tests)
         run: cargo check --workspace --all-targets --tests

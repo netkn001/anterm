@@ -20,9 +20,10 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
     sudo apt-get update && sudo apt-get install -y \
       build-essential pkg-config cmake \
       libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-      libwayland-dev libfontconfig1-dev libfreetype6-dev libvulkan-dev libasound2-dev libssl-dev
+      libwayland-dev libfontconfig1-dev libfreetype6-dev libvulkan-dev libasound2-dev libssl-dev \
+      libkrb5-dev libclang-dev
     ```
-  - Fedora / Arch: install the equivalent `pkg-config`, `cmake`, X11/XCB/Wayland, `libxkbcommon`, `fontconfig`, `freetype`, `vulkan`, and OpenSSL development packages.
+  - Fedora / Arch: install the equivalent `pkg-config`, `cmake`, X11/XCB/Wayland, `libxkbcommon`, `fontconfig`, `freetype`, `vulkan`, OpenSSL, Kerberos (`krb5-devel` / `krb5`), and Clang/libclang development packages.
 - **Windows**: Visual Studio Build Tools with the **Desktop development with C++** workload (MSVC links the CRT statically via `.cargo/config.toml`).
 
 ---

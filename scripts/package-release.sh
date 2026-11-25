@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 SKIP_BUILD=0
 BUILD_DMG=0
+BUILD_APPIMAGE=0
 TARGET=""
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 OUT_DIR="$ROOT_DIR/dist"
@@ -17,8 +18,9 @@ Usage: scripts/package-release.sh [OPTIONS]
 Build and package anterm release artifacts into dist/.
 
 Options:
-  --skip-build          Skip `cargo build --release --workspace` and package existing binaries
+  --skip-build          Skip `cargo build --release` and package existing binaries
   --dmg                 (macOS) Also create a drag-to-Applications .dmg image
+  --appimage            (Linux) Also create a self-updating .AppImage (requires appimagetool)
   --sign <IDENTITY>     (macOS) codesign identity (default: "-", ad-hoc; or env SIGN_IDENTITY)
   --target <TRIPLE>     Optional Cargo target triple (e.g. aarch64-apple-darwin)
   --out-dir <DIR>       Output directory (default: dist)
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dmg)
             BUILD_DMG=1
+            shift
+            ;;
+        --appimage)
+            BUILD_APPIMAGE=1
             shift
             ;;
         --sign)
@@ -209,20 +215,95 @@ EOF
     fi
 }
 
+write_linux_desktop_entry() {
+    local dest="$1"
+    cat > "$dest" <<EOF
+[Desktop Entry]
+Type=Application
+Name=anterm
+Comment=GPU-accelerated terminal workbench with persistent sessions, SSH/SFTP, editor, and coding agent support
+Exec=anterm-app %F
+Icon=anterm
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+StartupWMClass=anterm
+X-AppImage-Version=${VERSION}
+EOF
+}
+
 package_linux() {
     local stage="$OUT_DIR/anterm-${VERSION}-linux-${ARCH}"
     local tar="$OUT_DIR/anterm-${VERSION}-linux-${ARCH}.tar.gz"
+    local appimage="$OUT_DIR/anterm-${VERSION}-linux-${ARCH}.AppImage"
     local srv="$OUT_DIR/anterm-server-linux-${SERVER_ARCH}"
 
     echo "==> Packaging $tar ..."
-    rm -rf "$stage" "$tar" "$srv" "$OUT_DIR/SHA256SUMS.txt" "$OUT_DIR/checksums.txt"
-    mkdir -p "$stage"
+    rm -rf "$stage" "$tar" "$appimage" "$srv" "$OUT_DIR/SHA256SUMS.txt" "$OUT_DIR/checksums.txt"
+    mkdir -p \
+        "$stage/completions" \
+        "$stage/share/applications" \
+        "$stage/share/icons/hicolor/256x256/apps" \
+        "$stage/share/icons/hicolor/scalable/apps"
+
     cp "$BIN_DIR/anterm-app" "$BIN_DIR/anterm-updater" "$stage/"
     chmod +x "$stage/anterm-app" "$stage/anterm-updater"
+    cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/README.md" "$stage/"
+    cp "$ROOT_DIR"/assets/completions/*.json "$stage/completions/"
+    cp "$ROOT_DIR/assets/logo@256.png" "$stage/share/icons/hicolor/256x256/apps/anterm.png"
+    cp "$ROOT_DIR/assets/app-icon.svg" "$stage/share/icons/hicolor/scalable/apps/anterm.svg"
+    write_linux_desktop_entry "$stage/share/applications/anterm.desktop"
 
     tar -czf "$tar" -C "$OUT_DIR" "$(basename "$stage")"
     rm -rf "$stage"
     checksum_files+=("$(basename "$tar")")
+
+    if [[ "$BUILD_APPIMAGE" -eq 1 ]]; then
+        local appimagetool_bin="${APPIMAGETOOL:-appimagetool}"
+        if ! command -v "$appimagetool_bin" >/dev/null 2>&1; then
+            echo "error: --appimage requires 'appimagetool' on PATH (or set APPIMAGETOOL)" >&2
+            exit 1
+        fi
+        echo "==> Creating $appimage ..."
+        local appdir
+        appdir="$(mktemp -d)"
+        trap 'rm -rf "$appdir"' RETURN
+        mkdir -p \
+            "$appdir/usr/bin" \
+            "$appdir/usr/share/anterm/completions" \
+            "$appdir/usr/share/applications" \
+            "$appdir/usr/share/icons/hicolor/256x256/apps" \
+            "$appdir/usr/share/icons/hicolor/scalable/apps"
+
+        cp "$BIN_DIR/anterm-app" "$BIN_DIR/anterm-updater" "$appdir/usr/bin/"
+        chmod +x "$appdir/usr/bin/anterm-app" "$appdir/usr/bin/anterm-updater"
+        cp "$ROOT_DIR"/assets/completions/*.json "$appdir/usr/share/anterm/completions/"
+        cp "$ROOT_DIR/assets/logo@256.png" "$appdir/usr/share/icons/hicolor/256x256/apps/anterm.png"
+        cp "$ROOT_DIR/assets/app-icon.svg" "$appdir/usr/share/icons/hicolor/scalable/apps/anterm.svg"
+        # Exact path and X-AppImage-Version key verified by crates/anterm-updater/src/linux.rs.
+        write_linux_desktop_entry "$appdir/usr/share/applications/anterm.desktop"
+        ln -s "usr/share/applications/anterm.desktop" "$appdir/anterm.desktop"
+        ln -s "usr/share/icons/hicolor/256x256/apps/anterm.png" "$appdir/anterm.png"
+        ln -s "anterm.png" "$appdir/.DirIcon"
+
+        cat > "$appdir/AppRun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/anterm-app" "$@"
+EOF
+        chmod +x "$appdir/AppRun"
+
+        local appimage_arch="$RAW_ARCH"
+        case "$ARCH" in
+            x86_64) appimage_arch="x86_64" ;;
+            arm64)  appimage_arch="aarch64" ;;
+        esac
+        ARCH="$appimage_arch" "$appimagetool_bin" "$appdir" "$appimage"
+        rm -rf "$appdir"
+        trap - RETURN
+        chmod +x "$appimage"
+        checksum_files+=("$(basename "$appimage")")
+    fi
 
     cp "$BIN_DIR/anterm-server" "$srv"
     chmod +x "$srv"
@@ -233,6 +314,15 @@ package_linux() {
     if [[ "$ARCH" == "$HOST_ARCH" ]]; then
         echo "==> Smoke check:"
         "$srv" --version
+        if [[ "$BUILD_APPIMAGE" -eq 1 ]]; then
+            local verify_stage
+            verify_stage="$(mktemp -d)"
+            trap 'rm -rf "$verify_stage"' RETURN
+            "$BIN_DIR/anterm-updater" verify "$appimage" "$OUT_DIR/checksums.txt" "$(basename "$appimage")" "$verify_stage" "$VERSION"
+            rm -rf "$verify_stage"
+            trap - RETURN
+            echo "  -> anterm-updater verify: OK"
+        fi
     else
         echo "==> Skipping smoke check (cross-built $ARCH on $HOST_ARCH host)"
     fi

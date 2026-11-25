@@ -152,6 +152,7 @@ fn spec_source() -> &'static [PathBuf] {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 dirs.push(dir.join("../Resources/completions"));
+                dirs.push(dir.join("../share/anterm/completions"));
                 dirs.push(dir.join("completions"));
             }
         }

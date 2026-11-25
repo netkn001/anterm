@@ -245,6 +245,13 @@ pub fn git_output_with_env(
         // that schedules them — the read path is provably write-free. Do not
         // drop it.
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Force English diagnostic messages ("not a git repository", "nothing
+        // to commit", etc.) regardless of the host's LANG/LC_ALL so error
+        // classification works on non-English Linux/Unix locales, while
+        // leaving LC_CTYPE/LANG intact for UTF-8 paths.
+        .env_remove("LC_ALL")
+        .env("LC_MESSAGES", "C")
+        .env("LANGUAGE", "C")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .stdin(Stdio::null())
@@ -280,6 +287,13 @@ pub fn git_stream(
         .arg(cwd)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Force English diagnostic messages ("not a git repository", "nothing
+        // to commit", etc.) regardless of the host's LANG/LC_ALL so error
+        // classification works on non-English Linux/Unix locales, while
+        // leaving LC_CTYPE/LANG intact for UTF-8 paths.
+        .env_remove("LC_ALL")
+        .env("LC_MESSAGES", "C")
+        .env("LANGUAGE", "C")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .stdin(Stdio::null())
