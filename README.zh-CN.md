@@ -70,6 +70,7 @@ cargo dev
 # 构建 release 二进制（anterm-app、anterm-server、anterm-updater）并打包到 dist/
 ./scripts/package-release.sh          # macOS .app/.zip 或 Linux .tar.gz + SHA256SUMS.txt
 ./scripts/package-release.sh --dmg    # (macOS) 额外生成可拖拽安装的 .dmg 镜像
+.\scripts\package-windows.ps1         # (Windows PowerShell) 便携版 .zip + anterm-server.exe + checksums.txt
 ```
 
 仅编译无头会话服务端（零 GUI、SQLite、钥匙串依赖）：

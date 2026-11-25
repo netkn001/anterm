@@ -70,6 +70,7 @@ cargo dev
 # Build release binaries (anterm-app, anterm-server, anterm-updater) and package into dist/
 ./scripts/package-release.sh          # macOS .app/.zip or Linux .tar.gz + SHA256SUMS.txt
 ./scripts/package-release.sh --dmg    # (macOS) also create a drag-to-Applications .dmg
+.\scripts\package-windows.ps1         # (Windows PowerShell) portable .zip + anterm-server.exe + checksums.txt
 ```
 
 To build only the headless session daemon (zero GUI, SQLite, or keychain dependencies):

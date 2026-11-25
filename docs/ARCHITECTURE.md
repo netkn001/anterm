@@ -15,7 +15,7 @@ The repository is a **pure Cargo virtual workspace** containing **13 crates** un
 ├── .cargo/config.toml          # `cargo dev` alias (`run -p anterm-app --bin anterm-app -- --config-dir .anterm-dev`)
 ├── assets/                     # Shared icons, fonts, completions, and Windows ConPTY runtime
 ├── docs/                       # Architecture documentation
-├── scripts/                    # Release build & packaging scripts (`package-release.sh`)
+├── scripts/                    # Release build & packaging scripts (`package-release.sh`, `package-windows.ps1`)
 └── crates/
     ├── anterm-protocol/        # Leaf wire protocol, framing, tags, updater contracts & pure value types
     ├── anterm-i18n/            # Localization keys, plural rules & en/zh-CN translation tables (zero deps)
@@ -164,8 +164,9 @@ cargo tree -p anterm-updater | grep -E 'gpui|rusqlite|keyring' && exit 1 || echo
 # Run the desktop app in dev mode
 cargo dev
 
-# Build and package release artifacts into dist/ (add --dmg on macOS for a .dmg image)
-./scripts/package-release.sh --dmg
+# Build and package release artifacts into dist/
+./scripts/package-release.sh --dmg    # macOS (.app/.zip/.dmg) or Linux (.tar.gz)
+.\scripts\package-windows.ps1         # Windows (portable .zip + anterm-server.exe + checksums.txt)
 
 # Run all library tests across all 13 crates
 cargo test --workspace --lib
