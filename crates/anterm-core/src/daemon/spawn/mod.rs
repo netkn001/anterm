@@ -6,8 +6,12 @@ mod tests;
 mod windows;
 
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+static PREVENT_RESPAWN: AtomicBool = AtomicBool::new(false);
+static SPAWN_STOP_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static LAST_SPAWNED_PID: AtomicU32 = AtomicU32::new(0);
 
 use probe::{
     HANDSHAKE_TIMEOUT, HandoffReturn, MismatchVerdict, ProbeVerdict, VersionProbe,
@@ -258,6 +262,9 @@ fn land_probe(generation: u64, verdict: ProbeVerdict) {
 }
 
 pub fn ensure_running() -> anyhow::Result<()> {
+    if PREVENT_RESPAWN.load(Ordering::SeqCst) {
+        anyhow::bail!("daemon respawn suppressed during shutdown");
+    }
     // Skip a probe of a dead recorded process. The replacement owns endpoint
     // cleanup only after it acquires the singleton lock.
     let mut stale = recorded_daemon_is_dead();
@@ -344,12 +351,22 @@ pub fn ensure_running() -> anyhow::Result<()> {
         }
     }
 
-    spawn_detached()?;
+    {
+        let _gate = SPAWN_STOP_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        if PREVENT_RESPAWN.load(Ordering::SeqCst) {
+            anyhow::bail!("daemon respawn suppressed during shutdown");
+        }
+        let pid = spawn_detached()?;
+        LAST_SPAWNED_PID.store(pid, Ordering::SeqCst);
+    }
 
     // After the spawn, because the spawn is itself a generation move.
     let generation = daemon_generation();
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
+        if PREVENT_RESPAWN.load(Ordering::SeqCst) {
+            anyhow::bail!("daemon respawn suppressed during shutdown");
+        }
         if let Ok(mut stream) = transport::connect() {
             // Judged by the same rules as a daemon found already running, and
             // for the same reason. `restart()` is `stop()` + this function, so
@@ -719,7 +736,25 @@ pub fn hand_off() -> anyhow::Result<()> {
     }
 }
 
+/// Prevents any subsequent [`ensure_running`] call in this process from
+/// spawning a new daemon while the app is quitting.
+pub fn begin_shutdown() {
+    PREVENT_RESPAWN.store(true, Ordering::SeqCst);
+}
+
+/// Stops the daemon on app quit and fences out concurrent [`ensure_running`]
+/// callers so background reconnect loops cannot respawn it mid-shutdown.
+pub fn stop_for_quit() {
+    begin_shutdown();
+    stop();
+}
+
 pub fn stop() {
+    let _gate = SPAWN_STOP_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    stop_locked();
+}
+
+fn stop_locked() {
     use std::io::Write as _;
 
     daemon_generation_moved();
@@ -735,6 +770,9 @@ pub fn stop() {
     let recorded = pidfile::read()
         .or_else(crate::daemon::singleton::holder_pid)
         .filter(|&pid| pid > 4 && pid != std::process::id());
+    let last_spawned = LAST_SPAWNED_PID.swap(0, Ordering::SeqCst);
+    let last_spawned =
+        (last_spawned > 4 && last_spawned != std::process::id()).then_some(last_spawned);
 
     let mut asked = false;
     if let Ok(mut stream) = transport::connect() {
@@ -768,12 +806,26 @@ pub fn stop() {
     // (#653).
     reap_recorded_daemon(recorded);
 
+    // If an in-flight `spawn_detached` launched a fresh daemon moments before
+    // this stop acquired `SPAWN_STOP_GATE`, it may not have written a pidfile or
+    // bound its socket yet. Reap it by its spawned pid so it cannot finish
+    // starting after the GUI quits.
+    if let Some(pid) = last_spawned
+        && Some(pid) != recorded
+    {
+        reap_recorded_daemon(Some(pid));
+    }
+
     if transport::endpoint_exists() {
         transport::remove_stale_endpoint();
     }
+    #[cfg(windows)]
+    if last_spawned.is_some() {
+        crate::host::server::remove_control_endpoint();
+    }
 }
 
-fn spawn_detached() -> anyhow::Result<()> {
+fn spawn_detached() -> anyhow::Result<u32> {
     daemon_generation_moved();
     let exe = std::env::current_exe()
         .map_err(|e| anyhow::anyhow!("could not locate own executable: {e}"))?;
@@ -793,7 +845,7 @@ fn spawn_detached() -> anyhow::Result<()> {
             args.push(dir.as_os_str().to_owned());
         }
         match windows::spawn_detached_with_clean_parent(&exe, &args) {
-            Ok(()) => return Ok(()),
+            Ok(pid) => return Ok(pid),
             // The clean parent is unavailable whenever there is no interactive
             // Explorer to borrow — it is restarting, the shell was replaced, or
             // the session has no desktop at all. Losing it only costs junction
@@ -832,19 +884,27 @@ fn spawn_detached() -> anyhow::Result<()> {
             // is alive. The daemon remains independent when the GUI quits.
             if let Err(e) = std::thread::Builder::new()
                 .name("anterm-daemon-exit".into())
-                .spawn(move || match child.wait() {
-                    Ok(status) if status.success() => {
-                        log::info!("daemon child exited; child_pid={pid} status={status}")
+                .spawn(move || {
+                    match child.wait() {
+                        Ok(status) if status.success() => {
+                            log::info!("daemon child exited; child_pid={pid} status={status}")
+                        }
+                        Ok(status) => log::error!(
+                            "daemon child exited abnormally; child_pid={pid} status={status}"
+                        ),
+                        Err(e) => log::warn!("daemon child wait failed; child_pid={pid}: {e}"),
                     }
-                    Ok(status) => log::error!(
-                        "daemon child exited abnormally; child_pid={pid} status={status}"
-                    ),
-                    Err(e) => log::warn!("daemon child wait failed; child_pid={pid}: {e}"),
+                    let _ = LAST_SPAWNED_PID.compare_exchange(
+                        pid,
+                        0,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    );
                 })
             {
                 log::warn!("could not monitor daemon child pid={pid}: {e}");
             }
-            Ok(())
+            Ok(pid)
         }
         Err(e) => Err(anyhow::anyhow!("failed to spawn daemon process: {e}")),
     }

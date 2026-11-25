@@ -487,6 +487,18 @@ fn app_snapshot(cx: &mut App) -> TraySnapshot {
     }
 }
 
+/// Stops the local daemon, suppresses reconnect respawns, and quits the app.
+pub(crate) fn quit_stop_daemon_now(cx: &mut App) {
+    crate::ui::remote::local_link::LocalLink::shutdown(cx);
+    crate::daemon::spawn::begin_shutdown();
+    cx.spawn(async move |cx| {
+        cx.background_spawn(async { crate::daemon::spawn::stop_for_quit() })
+            .await;
+        let _ = cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
 fn dispatch(action: TrayAction, cx: &mut App) {
     use crate::ui::workspace::windows::WindowRegistry;
 
@@ -507,12 +519,7 @@ fn dispatch(action: TrayAction, cx: &mut App) {
             Some(restored) => deliver(action, restored, cx),
             None if matches!(action, TrayAction::Quit) => {
                 log::warn!("no window to confirm the quit in; stopping the server anyway");
-                cx.spawn(async move |cx| {
-                    cx.background_spawn(async { crate::daemon::spawn::stop() })
-                        .await;
-                    let _ = cx.update(|cx| cx.quit());
-                })
-                .detach();
+                quit_stop_daemon_now(cx);
             }
             None => {}
         }
@@ -555,15 +562,34 @@ pub(crate) fn init(cx: &mut App) {
         *slot = Some(tx.clone());
     }
 
+    let quitting = std::rc::Rc::new(std::cell::Cell::new(false));
+    let backend_slot: std::rc::Rc<std::cell::RefCell<Option<Backend>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    {
+        let quitting = quitting.clone();
+        let backend_slot = backend_slot.clone();
+        cx.on_app_quit(move |_| {
+            quitting.set(true);
+            ICON_UP.store(false, std::sync::atomic::Ordering::Relaxed);
+            drop(backend_slot.borrow_mut().take());
+            async move {}
+        })
+        .detach();
+    }
+
+    let quitting_dispatch = quitting.clone();
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv().await {
+            if quitting_dispatch.get() {
+                break;
+            }
             cx.update(|cx| dispatch(action, cx));
         }
     })
     .detach();
 
     cx.spawn(async move |cx| {
-        let mut backend: Option<Backend> = None;
         let mut shown: Option<TraySnapshot> = None;
         const MAX_ATTEMPTS: u32 = 10;
         const RETRY_EVERY: u32 = 30;
@@ -571,10 +597,14 @@ pub(crate) fn init(cx: &mut App) {
         let mut cooldown = 0u32;
         loop {
             cx.background_executor().timer(POLL).await;
+            if quitting.get() {
+                drop(backend_slot.borrow_mut().take());
+                break;
+            }
             let (enabled, snap) =
                 cx.update(|cx| (cx.global::<Config>().show_tray_icon, app_snapshot(cx)));
             if !enabled {
-                backend = None;
+                drop(backend_slot.borrow_mut().take());
                 shown = None;
                 attempts = 0;
                 cooldown = 0;
@@ -589,15 +619,22 @@ pub(crate) fn init(cx: &mut App) {
                 }
                 continue;
             }
-            if backend.is_none() && attempts < MAX_ATTEMPTS {
+            let needs_backend = backend_slot.borrow().is_none();
+            if needs_backend && attempts < MAX_ATTEMPTS {
                 if cooldown > 0 {
                     cooldown -= 1;
                     continue;
                 }
                 attempts += 1;
-                backend = Backend::create(tx.clone(), cx).await;
-                ICON_UP.store(backend.is_some(), std::sync::atomic::Ordering::Relaxed);
-                if backend.is_none() {
+                let created = Backend::create(tx.clone(), cx).await;
+                if quitting.get() {
+                    drop(created);
+                    break;
+                }
+                let is_up = created.is_some();
+                *backend_slot.borrow_mut() = created;
+                ICON_UP.store(is_up, std::sync::atomic::Ordering::Relaxed);
+                if !is_up {
                     cooldown = RETRY_EVERY;
                     if attempts == MAX_ATTEMPTS {
                         log::warn!(
@@ -608,7 +645,7 @@ pub(crate) fn init(cx: &mut App) {
                 }
                 shown = None;
             }
-            if let Some(backend) = backend.as_mut()
+            if let Some(backend) = backend_slot.borrow_mut().as_mut()
                 && shown.as_ref() != Some(&snap)
             {
                 backend.update(&snap);

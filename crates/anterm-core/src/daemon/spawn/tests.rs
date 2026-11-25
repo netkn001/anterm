@@ -1008,3 +1008,71 @@ mod mismatch_record_tests {
         );
     }
 }
+
+#[test]
+fn stop_for_quit_blocks_respawn_and_reaps_in_flight_spawn() {
+    const VAR: &str = "ANTERM_TEST_QUIT_RESPAWN_DIR";
+    const SLEEPER_VAR: &str = "ANTERM_TEST_QUIT_SLEEPER";
+    if std::env::var_os(SLEEPER_VAR).is_some() {
+        std::thread::sleep(Duration::from_secs(30));
+        return;
+    }
+    if let Some(dir) = std::env::var_os(VAR) {
+        crate::config::set_config_dir(PathBuf::from(dir));
+
+        // Simulate a daemon child spawned moments before quit begins, with
+        // no pidfile or listening socket yet.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::spawn::tests::stop_for_quit_blocks_respawn_and_reaps_in_flight_spawn",
+            ])
+            .env(SLEEPER_VAR, "1")
+            .spawn()
+            .unwrap();
+        let child_pid = child.id();
+        super::LAST_SPAWNED_PID.store(child_pid, std::sync::atomic::Ordering::SeqCst);
+
+        super::stop_for_quit();
+
+        // Wait briefly for OS process table to reflect termination.
+        let gone = super::wait_for_recorded_exit(child_pid, Duration::from_secs(2));
+        if !gone {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(
+            gone,
+            "in-flight spawned process pid={child_pid} survived stop_for_quit"
+        );
+
+        // A subsequent ensure_running() (e.g., from LocalLink or RemoteTerminal)
+        // must fail fast without waiting for STARTUP_TIMEOUT or spawning.
+        let started = std::time::Instant::now();
+        let err = ensure_running()
+            .expect_err("ensure_running must refuse to respawn after stop_for_quit");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "ensure_running took {:?} instead of failing fast: {err}",
+            started.elapsed()
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "daemon::spawn::tests::stop_for_quit_blocks_respawn_and_reaps_in_flight_spawn",
+            "--nocapture",
+        ])
+        .env(VAR, dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -46,7 +46,7 @@ pub(super) fn redirection_trust_enforced() -> bool {
 pub(super) fn spawn_detached_with_clean_parent(
     program: &Path,
     args: &[OsString],
-) -> io::Result<()> {
+) -> io::Result<u32> {
     let parent_pid = desktop_shell_pid()?;
     spawn_detached_with_parent(program, args, parent_pid)
 }
@@ -223,7 +223,7 @@ pub(super) fn spawn_detached_with_parent(
     program: &Path,
     args: &[OsString],
     parent_pid: u32,
-) -> io::Result<()> {
+) -> io::Result<u32> {
     // PROCESS_CREATE_PROCESS is the only access right required when a process
     // handle is supplied through PROC_THREAD_ATTRIBUTE_PARENT_PROCESS.
     // SAFETY: OpenProcess only reads `parent_pid` and returns an owned handle
@@ -285,7 +285,7 @@ pub(super) fn spawn_detached_with_parent(
     // handles mirrors dropping std::process::Child without waiting or killing.
     let _process = OwnedHandle(process_info.hProcess);
     let _thread = OwnedHandle(process_info.hThread);
-    Ok(())
+    Ok(process_info.dwProcessId)
 }
 
 #[cfg(test)]

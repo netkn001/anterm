@@ -783,6 +783,7 @@ pub struct AntermApp {
     pub(crate) settings_window: Option<crate::ui::chrome::settings::window::SettingsWindowHandle>,
     pub(crate) ssh_prompt: Entity<crate::ui::remote::ssh_prompt::SshPromptModal>,
     close_prompt_open: bool,
+    quit_prompt_open: bool,
     window_bounds: Bounds<Pixels>,
     pub(crate) tag_rename: Option<TagRename>,
     window_title: std::cell::RefCell<String>,

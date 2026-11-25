@@ -412,6 +412,7 @@ impl AntermApp {
             settings_window: None,
             ssh_prompt,
             close_prompt_open: false,
+            quit_prompt_open: false,
             window_bounds: window_bounds_to_remember(window),
             tag_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
@@ -839,6 +840,9 @@ impl AntermApp {
     pub(super) fn quit_stop_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.activate(true);
         window.activate_window();
+        if self.quit_prompt_open {
+            return;
+        }
         let unsaved = self.editor_unsaved(cx);
         if self.editor_guard_unsaved(
             unsaved,
@@ -861,6 +865,7 @@ impl AntermApp {
             });
             return;
         }
+        self.quit_prompt_open = true;
         let answer = window.prompt(
             PromptLevel::Warning,
             t(anterm_i18n::L10nKey::QuitStopServerTitle),
@@ -871,13 +876,12 @@ impl AntermApp {
             ),
             cx,
         );
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             if !matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, _| this.quit_prompt_open = false);
                 return;
             }
-            cx.background_spawn(async { crate::daemon::spawn::stop() })
-                .await;
-            let _ = cx.update(|cx| cx.quit());
+            let _ = cx.update(crate::ui::chrome::tray::quit_stop_daemon_now);
         })
         .detach();
     }

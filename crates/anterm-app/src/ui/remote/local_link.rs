@@ -107,6 +107,7 @@ pub struct LocalLink {
     next_attempt: Option<std::time::Instant>,
     attempting: bool,
     pumping: bool,
+    shutting_down: bool,
 }
 
 impl Global for LocalLink {}
@@ -115,16 +116,23 @@ impl LocalLink {
     pub fn install(cx: &mut App) {
         install_event_observer();
         let link = cx.default_global::<LocalLink>();
-        if link.pumping {
+        if link.pumping || link.shutting_down {
             return;
         }
         link.pumping = true;
         cx.spawn(async move |cx| {
             loop {
-                cx.update(|cx| {
+                let stop = cx.update(|cx| {
+                    if cx.default_global::<LocalLink>().shutting_down {
+                        return true;
+                    }
                     Self::tick(cx);
                     drain_events(cx);
+                    false
                 });
+                if stop {
+                    break;
+                }
                 cx.background_executor().timer(PUMP_TICK).await;
             }
         })
@@ -144,6 +152,18 @@ impl LocalLink {
             .is_some_and(|c| c.is_connected() && c.hello().has_feature(feature))
     }
 
+    /// Stops reconnecting to the local daemon when the application is quitting.
+    ///
+    /// Without this, `LocalLink::tick` observes the daemon dying during
+    /// `daemon::spawn::stop`, calls `ensure_running`, and spawns a fresh
+    /// `--daemon` process right before the GUI exits.
+    pub fn shutdown(cx: &mut App) {
+        let link = cx.default_global::<LocalLink>();
+        link.shutting_down = true;
+        link.client = None;
+        link.next_attempt = None;
+    }
+
     /// Drops the cached client without waiting for its reader to notice.
     ///
     /// The remembered hello `instance` deliberately survives: the reconnect
@@ -161,7 +181,7 @@ impl LocalLink {
     fn tick(cx: &mut App) {
         let now = std::time::Instant::now();
         let link = cx.default_global::<LocalLink>();
-        if link.attempting {
+        if link.shutting_down || link.attempting {
             return;
         }
         if let Some(client) = &link.client {
@@ -196,6 +216,9 @@ impl LocalLink {
             cx.update(|cx| {
                 let link = cx.default_global::<LocalLink>();
                 link.attempting = false;
+                if link.shutting_down {
+                    return;
+                }
                 match connected {
                     Ok(client) => {
                         log::info!("control link to the local daemon is up");
@@ -337,5 +360,22 @@ mod schedule_tests {
             assert_eq!(due(Some(at), 3, D, now), Due::Wait, "at +{step}ms");
         }
         assert_eq!(due(Some(at), 3, D, start + D), Due::Now);
+    }
+
+    #[gpui::test]
+    fn shutdown_suppresses_reconnect_ticks(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            LocalLink::shutdown(cx);
+            LocalLink::tick(cx);
+            let link = cx.global::<LocalLink>();
+            assert!(
+                !link.attempting,
+                "LocalLink::tick must not start a reconnect attempt after shutdown"
+            );
+            assert!(
+                link.next_attempt.is_none(),
+                "LocalLink::tick must not schedule a reconnect after shutdown"
+            );
+        });
     }
 }
