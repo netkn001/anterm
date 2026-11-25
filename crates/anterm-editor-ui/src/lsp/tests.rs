@@ -132,8 +132,7 @@ fn lsp_smoke_a_real_server_publishes_diagnostics_and_shuts_down() {
     let result = within(30, Box::pin(async move { init.await.ok() })).expect("initialize answered");
     let init: lsp_types::InitializeResult = serde_json::from_value(result).unwrap();
     assert!(init.capabilities.hover_provider.is_some());
-    client.notify_raw("initialized", json!({}));
-    client.open_gate();
+    client.open_gate_with(&[("initialized", json!({}))]);
 
     let uri = path_to_uri(&file).unwrap();
     client.notify::<lsp_types::notification::DidOpenTextDocument>(
@@ -281,6 +280,17 @@ mod harness {
     }
 
     impl FakeServer {
+        pub(super) fn new(
+            from_client: std::io::PipeReader,
+            to_client: std::io::PipeWriter,
+        ) -> Self {
+            Self {
+                frames: FrameReader::default(),
+                from_client,
+                _to_client: to_client,
+            }
+        }
+
         pub(super) fn next(&mut self) -> Value {
             let mut chunk = [0u8; 4096];
             loop {
@@ -539,4 +549,53 @@ fn turning_lsp_back_on_offers_every_window_again(cx: &mut gpui::TestAppContext) 
     set(cx, true);
     assert_eq!(asked.get(), 2);
     assert_eq!(cx.update(|cx| cx.global::<LspStore>().windows.len()), 1);
+}
+
+/// Regression: when a file opens while the server is still answering
+/// `initialize`, `didOpen` is queued behind the gate. Finishing `initialize`
+/// must send `initialized` (and configuration) *before* flushing `didOpen`,
+/// or strict LSP servers (`rust-analyzer`, `ty`) immediately abort the
+/// connection.
+#[gpui::test]
+fn initialized_reaches_the_server_before_queued_did_open(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_global(anterm_ui_kit::config::Config::default());
+        LspStore::ensure(cx);
+    });
+    let (client_reads, server_writes) = std::io::pipe().unwrap();
+    let (server_reads, client_writes) = std::io::pipe().unwrap();
+    let (client, _events) = LspClient::from_streams("fake", client_reads, client_writes).unwrap();
+    let mut server = harness::FakeServer::new(server_reads, server_writes);
+
+    // Queue `didOpen` while the gate is still closed, exactly as `open_doc` does.
+    client.notify_raw("textDocument/didOpen", json!({ "uri": "file:///a.rs" }));
+    let key = ServerKey {
+        name: "rust-analyzer",
+        root: test_path("/tmp/anterm-lsp-init-order"),
+    };
+    cx.update(|cx| {
+        cx.update_global::<LspStore, _>(|store, cx| {
+            store.servers.insert(
+                key.clone(),
+                Server {
+                    spec: servers::spec_for_language("rust").unwrap(),
+                    label: "rust-analyzer".into(),
+                    generation: 1,
+                    phase: Phase::Starting,
+                    client: Some(client),
+                    caps: Rc::new(lsp_types::ServerCapabilities::default()),
+                    encoding: Encoding::Utf16,
+                    crashes: Vec::new(),
+                    idle_seq: 0,
+                    _tasks: Vec::new(),
+                },
+            );
+            store.initialized(&key, 1, Ok(json!({ "capabilities": {} })), cx);
+        });
+    });
+
+    assert_eq!(server.next()["method"], "initialized");
+    assert_eq!(server.next()["method"], "workspace/didChangeConfiguration");
+    assert_eq!(server.next()["method"], "textDocument/didOpen");
 }

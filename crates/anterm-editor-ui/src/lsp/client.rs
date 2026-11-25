@@ -210,14 +210,28 @@ impl LspClient {
         }
     }
 
+    /// Sends `leading` handshake notifications (such as `initialized` and
+    /// `workspace/didChangeConfiguration`) and then flushes everything held
+    /// back for `initialize`, in the order it was sent. Held under the gate's
+    /// lock, so queued messages (`textDocument/didOpen`, …) never overtake
+    /// `initialized`, which LSP servers strictly require first.
+    pub fn open_gate_with(&self, leading: &[(&str, Value)]) {
+        let mut gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        for (method, params) in leading {
+            let _ = self
+                .out
+                .send(rpc::encode(&rpc::notification(method, params.clone())));
+        }
+        for bytes in gate.take().unwrap_or_default() {
+            let _ = self.out.send(bytes);
+        }
+    }
+
     /// Lets through everything held back for `initialize`, in the order it
     /// was sent. Held under the gate's lock, so nothing sent meanwhile can
     /// overtake it.
     pub fn open_gate(&self) {
-        let mut gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
-        for bytes in gate.take().unwrap_or_default() {
-            let _ = self.out.send(bytes);
-        }
+        self.open_gate_with(&[]);
     }
 
     /// Sends a request, returning the server's answer. Dropping the future
@@ -462,11 +476,14 @@ mod tests {
             .send(json!({ "jsonrpc": "2.0", "id": first["id"], "result": { "capabilities": {} } }));
         let answer = smol::block_on(init).unwrap();
         assert_eq!(answer, json!({ "capabilities": {} }));
-        client.notify_raw("initialized", json!({}));
-        client.open_gate();
-        // Held messages come out first, in the order they were sent.
-        assert_eq!(server.next()["method"], "textDocument/didOpen");
+        client.open_gate_with(&[
+            ("initialized", json!({})),
+            ("workspace/didChangeConfiguration", json!({ "settings": {} })),
+        ]);
+        // Handshake notifications go first; queued messages follow in order.
         assert_eq!(server.next()["method"], "initialized");
+        assert_eq!(server.next()["method"], "workspace/didChangeConfiguration");
+        assert_eq!(server.next()["method"], "textDocument/didOpen");
     }
 
     #[test]

@@ -841,14 +841,16 @@ impl LspStore {
                 server.encoding = Encoding::from_kind(init.capabilities.position_encoding.as_ref());
                 server.caps = Rc::new(init.capabilities);
                 server.phase = Phase::Running;
-                client.notify_raw("initialized", json!({}));
-                // Servers that pull their settings (pyright) wait for this
-                // before asking; the rest take them as sent.
-                client.notify_raw(
-                    "workspace/didChangeConfiguration",
-                    json!({ "settings": server.spec.settings() }),
-                );
-                client.open_gate();
+                // `initialized` must reach the server before any queued
+                // `textDocument/didOpen`, and servers that pull their settings
+                // (pyright) wait for `workspace/didChangeConfiguration`.
+                client.open_gate_with(&[
+                    ("initialized", json!({})),
+                    (
+                        "workspace/didChangeConfiguration",
+                        json!({ "settings": server.spec.settings() }),
+                    ),
+                ]);
                 log::info!("lsp: {} is ready", server.label);
                 let paths: Vec<PathBuf> = self
                     .docs
