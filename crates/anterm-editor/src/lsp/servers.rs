@@ -57,11 +57,13 @@ pub const SERVERS: &[ServerSpec] = &[
         name: "pyright",
         languages: &["python"],
         commands: &[
+            ("ty", &["server"]),
             ("pyright-langserver", &["--stdio"]),
             ("basedpyright-langserver", &["--stdio"]),
             ("pylsp", &[]),
         ],
         root_markers: &[
+            "ty.toml",
             "pyproject.toml",
             "pyrightconfig.json",
             "setup.py",
@@ -393,5 +395,25 @@ mod tests {
         assert_eq!(program, pylsp);
         assert!(args.is_empty());
         assert!(resolve(rust(), dir.path().as_os_str()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ty_is_resolved_with_server_subcommand_and_ty_toml_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let ty = dir.path().join("ty");
+        std::fs::write(&ty, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&ty, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let py = spec_for_language("python").unwrap();
+        let (program, args) = resolve(py, dir.path().as_os_str()).unwrap();
+        assert_eq!(program, ty);
+        assert_eq!(args, &["server"]);
+
+        let t = tree(&["proj/ty.toml", "proj/app/main.py"]);
+        assert_eq!(
+            find_root(&t.path().join("proj/app/main.py"), py, None),
+            t.path().join("proj")
+        );
     }
 }
