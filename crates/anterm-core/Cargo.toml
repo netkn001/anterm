@@ -103,7 +103,10 @@ ureq = { version = "3", default-features = false, features = [
     "socks-proxy",
 ], optional = true }
 
-russh = "0.65"
+# Use the `ring` crypto backend instead of `aws-lc-rs` (default) so building on
+# Windows/Linux/macOS never requires CMake/NASM for `aws-lc-sys` and reuses the
+# `ring` crate already pulled in by `ureq`/`rustls`.
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
 russh-sftp = "2"
 
 # tokio powers only the russh session engine — a single runtime `daemon::ssh`
