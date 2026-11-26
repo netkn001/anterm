@@ -1,0 +1,45 @@
+name: iOS Release
+
+on:
+  push:
+    tags:
+      - "ios-v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-ios:
+    name: Build iOS XCFramework & Simulator Archive
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain & iOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build Rust XCFramework & Swift bindings
+        env:
+          ANTERM_RUST_PROFILE: release
+        run: bash mobile/ios/scripts/build-rust-xcframework.sh
+
+      - name: Build iOS Simulator target
+        run: |
+          xcodebuild \
+            -project mobile/ios/Anterm.xcodeproj \
+            -scheme Anterm \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build

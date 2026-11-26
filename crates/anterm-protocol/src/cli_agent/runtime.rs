@@ -53,6 +53,11 @@ pub struct AgentSessionState {
     /// told apart from the newest. `None` from a daemon that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_ms: Option<u64>,
+    /// Native transcript file path reported by the agent's hook on the host
+    /// (e.g. Claude Code's `transcript_path` JSONL file), enabling zero-PTY-impact
+    /// structured streaming to mobile clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<std::path::PathBuf>,
 }
 
 /// What an agent says about how it is set up — what the message composer's
@@ -173,6 +178,9 @@ impl AgentSessionState {
         if let Some(cwd) = &ev.cwd {
             self.cwd = Some(cwd.clone());
         }
+        if let Some(path) = &ev.transcript_path {
+            self.transcript_path = Some(path.clone());
+        }
         self.readout.merge(&ev.readout);
         match ev.kind {
             AgentEventKind::SessionStart => {
@@ -240,6 +248,8 @@ pub struct AgentEvent {
     /// `resume`, `clear` (Codex's `/new`), `compact`.
     pub source: Option<String>,
     pub readout: AgentReadout,
+    /// Native session transcript path on the host machine when reported by hooks.
+    pub transcript_path: Option<std::path::PathBuf>,
 }
 
 pub fn parse_agent_event(payload: &[u8]) -> Option<AgentEvent> {
@@ -267,6 +277,8 @@ pub fn parse_agent_event_body(json: &[u8]) -> Option<AgentEvent> {
         cwd: Option<String>,
         #[serde(default)]
         source: Option<String>,
+        #[serde(default)]
+        transcript_path: Option<String>,
         #[serde(flatten)]
         readout: AgentReadout,
     }
@@ -282,5 +294,6 @@ pub fn parse_agent_event_body(json: &[u8]) -> Option<AgentEvent> {
         cwd: nonempty(w.cwd).map(std::path::PathBuf::from),
         source: nonempty(w.source),
         readout: w.readout,
+        transcript_path: nonempty(w.transcript_path).map(std::path::PathBuf::from),
     })
 }

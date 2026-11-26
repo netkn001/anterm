@@ -70,7 +70,13 @@ jobs:
           fi
 
       - name: Test headless crates
-        run: cargo test -p anterm-protocol -p anterm-i18n -p anterm-editor -p anterm-core --lib
+        run: cargo test -p anterm-protocol -p anterm-i18n -p anterm-editor -p anterm-core -p anterm-client-core -p anterm-gateway -p anterm-mobile-ffi --lib
+
+      - name: Cross-check mobile Rust core for iOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          rustup target add aarch64-apple-ios
+          cargo check -p anterm-mobile-ffi --target aarch64-apple-ios
 
       - name: Test full workspace
         if: matrix.run_full_tests

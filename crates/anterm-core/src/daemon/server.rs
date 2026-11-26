@@ -995,7 +995,20 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         // the field stays on the wire so a future observer-side viewport does
         // not need another message kind.
         ClientMsg::Observe { pane_id, size: _ } => match registry.get(pane_id) {
-            Some(pane) => stream_observer(pane, read_stream, write_stream),
+            Some(pane) => stream_observer(pane, read_stream, write_stream, None),
+            None => {
+                let mut w = write_stream;
+                DaemonMsg::Error(format!("no such pane {pane_id}")).encode(&mut w)?;
+                Ok(())
+            }
+        },
+
+        ClientMsg::ObserveSince {
+            pane_id,
+            size: _,
+            since_offset,
+        } => match registry.get(pane_id) {
+            Some(pane) => stream_observer(pane, read_stream, write_stream, Some(since_offset)),
             None => {
                 let mut w = write_stream;
                 DaemonMsg::Error(format!("no such pane {pane_id}")).encode(&mut w)?;
@@ -1310,6 +1323,7 @@ fn stream_observer(
     pane: Arc<DaemonPane>,
     mut read_stream: Stream,
     write_stream: Stream,
+    since_mode: Option<Option<u64>>,
 ) -> anyhow::Result<()> {
     // The pane holds the channel's only sender, and refusals go through it,
     // so an observer the pane drops at its budget loses its stream: the writer
@@ -1317,7 +1331,10 @@ fn stream_observer(
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let gate = Arc::new(crate::daemon::pane::OutputGate::new());
-    let observer_id = pane.observe(tx, gate.clone());
+    let observer_id = match since_mode {
+        Some(since_offset) => pane.observe_since(tx, gate.clone(), since_offset),
+        None => pane.observe(tx, gate.clone()),
+    };
     let writer = spawn_writer(rx, write_stream, gate);
 
     observe_loop(

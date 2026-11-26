@@ -1,0 +1,22 @@
+[package]
+name = "anterm-client-core"
+version.workspace = true
+edition.workspace = true
+description = "Framework-free terminal client engine for anterm desktop and mobile: VT mirror, dirty-row Metal frame packer, client-side reflow, shared agent composer brain, and predictive local echo"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anterm-protocol = { path = "../anterm-protocol" }
+anterm-core = { path = "../anterm-core", default-features = false }
+alacritty_terminal.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+unicode-width = "0.2"
+
+[lints]
+workspace = true

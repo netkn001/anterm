@@ -92,7 +92,7 @@ fn note_held(_file: &File) {}
 ///
 /// `fd` must be an open descriptor on the lock file, inherited across the exec
 /// and not owned by anything else.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "local-daemon"))]
 pub unsafe fn adopt(fd: std::os::fd::RawFd) -> Singleton {
     // The exec this descriptor crossed required stripping close-on-exec; put it
     // back before anything is spawned. A child inheriting the seat holds the

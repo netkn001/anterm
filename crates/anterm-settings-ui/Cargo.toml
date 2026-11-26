@@ -13,6 +13,7 @@ test-support = []
 
 [dependencies]
 anterm-core = { path = "../anterm-core", features = ["gssapi", "remote-install", "history-db"] }
+anterm-gateway = { path = "../anterm-gateway" }
 anterm-i18n = { path = "../anterm-i18n" }
 anterm-protocol = { path = "../anterm-protocol" }
 anterm-ui-kit = { path = "../anterm-ui-kit" }

@@ -3441,6 +3441,7 @@ mod unix_tests {
                 inferred: false,
                 readout: Default::default(),
                 since_ms: None,
+                transcript_path: None,
             }))
             .encode(daemon)
             .unwrap();
@@ -3505,6 +3506,7 @@ mod unix_tests {
             inferred: false,
             readout: Default::default(),
             since_ms: None,
+            transcript_path: None,
         }))
         .encode(&mut daemon_side)
         .unwrap();
@@ -3558,6 +3560,7 @@ mod unix_tests {
             inferred: false,
             readout: Default::default(),
             since_ms: None,
+            transcript_path: None,
         }))
         .encode(&mut daemon_side)
         .unwrap();

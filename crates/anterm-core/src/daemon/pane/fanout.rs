@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::daemon::protocol::{DaemonMsg, WinSize};
 
-use super::restore::replay_state;
+use super::restore::{replay_state, replay_state_since};
 use super::ring::RING_CAP;
 use super::{GraphicsFrame, PaneState};
 
@@ -372,6 +372,28 @@ pub(super) fn observe_subscriber(
     // as it goes out; until it did, a full ring alone was the whole budget, and
     // the first byte of live output dropped the observer for good.
     gate.add(replay_state(st, &observer, foreground_command));
+    st.observers.push(Observer {
+        id: st.observer_seq,
+        tx: observer,
+        gate,
+    });
+    st.observer_seq
+}
+
+pub(super) fn observe_subscriber_since(
+    st: &mut PaneState,
+    observer: Sender<DaemonMsg>,
+    gate: Arc<OutputGate>,
+    foreground_command: bool,
+    since_offset: Option<u64>,
+) -> u64 {
+    st.observer_seq += 1;
+    gate.add(replay_state_since(
+        st,
+        &observer,
+        foreground_command,
+        since_offset,
+    ));
     st.observers.push(Observer {
         id: st.observer_seq,
         tx: observer,

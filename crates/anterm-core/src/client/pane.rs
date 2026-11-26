@@ -187,6 +187,15 @@ impl PaneClient {
     pub fn observe(&self, pane_id: u64, size: WinSize) -> io::Result<PaneSession> {
         PaneSession::observe_over(self.open()?, pane_id, size, OPEN_REPLY_WAIT)
     }
+
+    pub fn observe_since(
+        &self,
+        pane_id: u64,
+        size: WinSize,
+        since_offset: Option<u64>,
+    ) -> io::Result<PaneSession> {
+        PaneSession::observe_since_over(self.open()?, pane_id, size, since_offset, OPEN_REPLY_WAIT)
+    }
 }
 
 #[derive(Debug)]
@@ -263,6 +272,22 @@ impl PaneSession {
     ) -> io::Result<PaneSession> {
         ClientMsg::Observe { pane_id, size }.encode(&mut stream)?;
         PaneSession::checked(stream, "Observe", pane_id, reply_wait)
+    }
+
+    pub(crate) fn observe_since_over(
+        mut stream: transport::Stream,
+        pane_id: u64,
+        size: WinSize,
+        since_offset: Option<u64>,
+        reply_wait: Duration,
+    ) -> io::Result<PaneSession> {
+        ClientMsg::ObserveSince {
+            pane_id,
+            size,
+            since_offset,
+        }
+        .encode(&mut stream)?;
+        PaneSession::checked(stream, "ObserveSince", pane_id, reply_wait)
     }
 
     fn checked(

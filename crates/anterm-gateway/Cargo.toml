@@ -1,0 +1,41 @@
+[package]
+name = "anterm-gateway"
+version.workspace = true
+edition.workspace = true
+description = "End-to-end encrypted iroh QUIC mobile gateway and client for anterm: QR pairing, device auth, multiplexed control/pane/transcript/port-tunnel streams"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["host"]
+# Host-side daemon bridge (local sockets, transcript tailer, device store).
+# Mobile clients disable default features so zero local-daemon code is pulled in.
+host = ["anterm-core/local-daemon", "tokio/signal"]
+
+[dependencies]
+anterm-protocol = { path = "../anterm-protocol" }
+anterm-core = { path = "../anterm-core", default-features = false }
+anyhow.workspace = true
+base64 = "0.22"
+getrandom = "0.3"
+iroh = "1.5"
+log.workspace = true
+qrcode = { version = "0.15", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+] }
+zstd = "0.14"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

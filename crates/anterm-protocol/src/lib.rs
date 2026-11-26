@@ -6,11 +6,13 @@
 
 pub mod cli_agent;
 pub mod diff;
+pub mod gateway;
 pub mod ids;
 pub mod keychain;
 pub mod pane;
 pub mod shell_quote;
 pub mod ssh_profile;
 pub mod tag;
+pub mod transcript;
 pub mod updater;
 pub mod util;

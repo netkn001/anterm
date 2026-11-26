@@ -275,6 +275,7 @@ pub fn run() {
         register_app_hooks(cx);
         keymap::init(cx);
         crate::ui::remote::local_link::LocalLink::install(cx);
+        anterm_gateway::GatewayRuntime::global().sync_default_background();
 
         crate::ui::workspace::windows::open_at(cx, open_path);
         if config_outcome.failed() {

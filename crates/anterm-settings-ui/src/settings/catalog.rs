@@ -508,6 +508,31 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
             title: SettingsAutoDownload,
             keywords: SettingsSearchAutoDownloadKeywords,
         },
+        SearchEntry {
+            section: Mobile,
+            title: SettingsMobileEnable,
+            keywords: SettingsSearchMobileKeywords,
+        },
+        SearchEntry {
+            section: Mobile,
+            title: SettingsMobileLanOnly,
+            keywords: SettingsSearchMobileKeywords,
+        },
+        SearchEntry {
+            section: Mobile,
+            title: SettingsMobileRelayUrl,
+            keywords: SettingsSearchMobileKeywords,
+        },
+        SearchEntry {
+            section: Mobile,
+            title: SettingsMobilePreventSleep,
+            keywords: SettingsSearchMobileKeywords,
+        },
+        SearchEntry {
+            section: Mobile,
+            title: SettingsMobileSilenceWhenActive,
+            keywords: SettingsSearchMobileKeywords,
+        },
     ]
 }
 
@@ -681,6 +706,13 @@ impl SearchEntry {
             L10nKey::DetectUrls => t(L10nKey::SettingsDetectUrlsDesc),
             L10nKey::ForwardSshLoopbackLinks => t(L10nKey::SettingsForwardSshLoopbackLinksDesc),
             L10nKey::OpenFilesWith => t(L10nKey::SettingsOpenFilesModeDesc),
+            L10nKey::SettingsMobileEnable => t(L10nKey::SettingsMobileEnableDesc),
+            L10nKey::SettingsMobileLanOnly => t(L10nKey::SettingsMobileLanOnlyDesc),
+            L10nKey::SettingsMobileRelayUrl => t(L10nKey::SettingsMobileRelayUrlDesc),
+            L10nKey::SettingsMobilePreventSleep => t(L10nKey::SettingsMobilePreventSleepDesc),
+            L10nKey::SettingsMobileSilenceWhenActive => {
+                t(L10nKey::SettingsMobileSilenceWhenActiveDesc)
+            }
             _ => "",
         }
     }

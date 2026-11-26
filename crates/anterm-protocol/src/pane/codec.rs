@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::{from_json, to_json};
 
-use super::{ClientMsg, DaemonMsg, MAX_FRAME, RestoreFrom, ShellSpec, WinSize};
+use super::{ClientMsg, DaemonMsg, MAX_FRAME, ReplayMode, RestoreFrom, ShellSpec, WinSize};
 
 /// A frame is a little-endian `u32` length, a one-byte kind, then the payload.
 const HEADER: usize = 5;
@@ -44,6 +44,7 @@ pub(super) mod kind {
     pub const LEASE: u8 = 57;
     pub const AGENT_EVENT: u8 = 58;
     pub const CLEAR_SCROLLBACK: u8 = 59;
+    pub const OBSERVE_SINCE: u8 = 60;
 
     pub const SPAWNED: u8 = 1;
     pub const SNAPSHOT: u8 = 2;
@@ -79,6 +80,7 @@ pub(super) mod kind {
     pub const DELETE_IMAGE: u8 = 61;
     pub const CLIPBOARD_WRITE: u8 = 62;
     pub const LEASE_HOLDER: u8 = 63;
+    pub const REPLAY_CURSOR: u8 = 64;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -183,6 +185,20 @@ struct OwnedSpawn {
     allow_remote_clipboard_write: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ObserveSinceWire {
+    pane_id: u64,
+    size: WinSize,
+    #[serde(default)]
+    since_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplayCursorWire {
+    offset: u64,
+    mode: ReplayMode,
+}
+
 impl ClientMsg {
     pub fn encode<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
@@ -233,6 +249,19 @@ impl ClientMsg {
             ClientMsg::Observe { pane_id, size } => {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
+            ClientMsg::ObserveSince {
+                pane_id,
+                size,
+                since_offset,
+            } => write_frame(
+                w,
+                kind::OBSERVE_SINCE,
+                &to_json(&ObserveSinceWire {
+                    pane_id: *pane_id,
+                    size: *size,
+                    since_offset: *since_offset,
+                })?,
+            ),
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::SendInput { pane_id, bytes } => {
                 write_frame(w, kind::SEND_INPUT, &to_json(&(pane_id, bytes))?)
@@ -360,6 +389,18 @@ impl ClientMsg {
                 let (pane_id, size) = from_json(&payload)?;
                 ClientMsg::Observe { pane_id, size }
             }
+            kind::OBSERVE_SINCE => {
+                let ObserveSinceWire {
+                    pane_id,
+                    size,
+                    since_offset,
+                } = from_json(&payload)?;
+                ClientMsg::ObserveSince {
+                    pane_id,
+                    size,
+                    since_offset,
+                }
+            }
             kind::INPUT => ClientMsg::Input(payload),
             kind::SEND_INPUT => {
                 let (pane_id, bytes) = from_json(&payload)?;
@@ -469,6 +510,14 @@ impl DaemonMsg {
             DaemonMsg::DeleteImage(sel) => write_frame(w, kind::DELETE_IMAGE, sel),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Lease(by) => write_frame(w, kind::LEASE_HOLDER, &to_json(by)?),
+            DaemonMsg::ReplayCursor { offset, mode } => write_frame(
+                w,
+                kind::REPLAY_CURSOR,
+                &to_json(&ReplayCursorWire {
+                    offset: *offset,
+                    mode: *mode,
+                })?,
+            ),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
                 active,
@@ -527,6 +576,10 @@ impl DaemonMsg {
             kind::DELETE_IMAGE => DaemonMsg::DeleteImage(payload),
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
             kind::LEASE_HOLDER => DaemonMsg::Lease(from_json(&payload)?),
+            kind::REPLAY_CURSOR => {
+                let ReplayCursorWire { offset, mode } = from_json(&payload)?;
+                DaemonMsg::ReplayCursor { offset, mode }
+            }
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
                 let (active, at_prompt, last_exit) = from_json(&payload)?;

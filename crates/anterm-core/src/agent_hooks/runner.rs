@@ -186,6 +186,8 @@ fn build_hook_body(agent: &str, event: &str, stdin_json: &str) -> String {
         ("cwd", "working_dir"),
         // What started a session — see `cli_agent::AgentEvent::source`.
         ("source", "source"),
+        // Native session transcript file on the host for zero-PTY-impact mobile streaming.
+        ("transcript_path", "transcriptPath"),
     ] {
         if let Some(v) = payload
             .get(key)

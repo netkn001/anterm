@@ -12,6 +12,7 @@ fn the_readout_keeps_what_later_events_leave_out() {
         cwd: None,
         source: None,
         readout,
+        transcript_path: None,
     };
     state.apply_event(&event(AgentReadout {
         permission_mode: Some("plan".into()),
@@ -25,6 +26,38 @@ fn the_readout_keeps_what_later_events_leave_out() {
     assert_eq!(state.readout.permission_mode.as_deref(), Some("plan"));
     assert_eq!(state.readout.model.as_deref(), Some("claude-opus-5-5"));
     assert_eq!(state.readout.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn transcript_path_parses_and_persists_across_events() {
+    let ev = parse_agent_event_body(
+        br#"{"v":1,"agent":"claude","event":"session-start","session_id":"s1","transcript_path":"/Users/me/.claude/projects/p/s1.jsonl"}"#,
+    )
+    .expect("parses");
+    assert_eq!(
+        ev.transcript_path.as_deref(),
+        Some(std::path::Path::new(
+            "/Users/me/.claude/projects/p/s1.jsonl"
+        ))
+    );
+    let mut state = AgentSessionState::default();
+    state.apply_event(&ev);
+    assert_eq!(
+        state.transcript_path.as_deref(),
+        Some(std::path::Path::new(
+            "/Users/me/.claude/projects/p/s1.jsonl"
+        ))
+    );
+    let follow = parse_agent_event_body(br#"{"v":1,"agent":"claude","event":"tool-complete"}"#)
+        .expect("parses");
+    state.apply_event(&follow);
+    assert_eq!(
+        state.transcript_path.as_deref(),
+        Some(std::path::Path::new(
+            "/Users/me/.claude/projects/p/s1.jsonl"
+        )),
+        "later events without transcript_path must keep the remembered path"
+    );
 }
 
 #[test]
@@ -574,6 +607,7 @@ fn session_state_machine_follows_the_turn() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     s.apply_event(&ev(AgentEventKind::SessionStart, None, Some("sid-1")));
@@ -638,6 +672,7 @@ fn a_hook_after_a_notification_does_not_start_a_turn() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     });
     assert_eq!(s.status, AgentStatus::Idle);
     assert_eq!(s.message, None);
@@ -655,6 +690,7 @@ fn tool_completions_count_even_when_the_status_holds_still() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     let mut s = AgentSessionState::default();
@@ -690,6 +726,7 @@ fn an_assumed_interrupt_ends_the_turn_until_the_agent_says_otherwise() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     let mut s = AgentSessionState::default();
@@ -743,6 +780,7 @@ fn a_stale_turn_goes_idle_and_comes_back_on_the_next_tool() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     let mut s = AgentSessionState::default();
@@ -803,6 +841,7 @@ fn each_finished_turn_is_counted_once() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     let mut s = AgentSessionState::default();
@@ -836,6 +875,7 @@ fn session_state_tracks_and_releases_the_agent_cwd() {
         cwd: cwd.map(PathBuf::from),
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
 
     let mut s = AgentSessionState::default();

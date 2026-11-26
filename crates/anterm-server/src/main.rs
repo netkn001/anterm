@@ -14,10 +14,13 @@ USAGE:
     anterm-server --stdio [--serve | --bridge] [--control-sock <path>]
     anterm-server --stdio --pane [--config-dir <dir>]
     anterm-server --stop [--config-dir <dir>]
+    anterm-server --gateway [--lan-only] [--relay <url>] [--config-dir <dir>]
+    anterm-server pair [--role interactive|observe_only|full] [--ttl <secs>] [--lan-only] [--relay <url>]
     anterm-server agent-hook <agent> <event>
 
 OPTIONS:
     --daemon              Serve panes and control connections until killed
+    --gateway             Serve the E2EE mobile QUIC gateway (requires `gateway` feature)
     --stdio               Carry one control connection on stdin/stdout
       --serve               Answer requests in this process (no socket)
       --bridge              Forward to the machine's control socket
@@ -82,12 +85,88 @@ fn main() -> ExitCode {
         };
     }
 
+    if args.first().map(String::as_str) == Some("pair") {
+        return run_pair(&args[1..]);
+    }
+
+    if args.iter().any(|a| a == "--gateway") {
+        return run_gateway(&args);
+    }
+
     if args.iter().any(|a| a == "--daemon") {
         return run_daemon();
     }
 
-    eprint!("anterm-server: nothing to do without --daemon or --stdio\n\n{USAGE}");
+    eprint!("anterm-server: nothing to do without --daemon, --gateway, pair, or --stdio\n\n{USAGE}");
     ExitCode::FAILURE
+}
+
+fn run_pair(args: &[String]) -> ExitCode {
+    #[cfg(feature = "gateway")]
+    {
+        let role = match flag_value(args, "--role") {
+            Some(raw) => match anterm_gateway::cli::parse_role(&raw) {
+                Ok(role) => role,
+                Err(err) => {
+                    eprintln!("anterm-server: {err}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => anterm_gateway::MobileRole::Interactive,
+        };
+        let ttl_secs = match flag_value(args, "--ttl") {
+            Some(raw) => match raw.parse::<u64>() {
+                Ok(v) if v > 0 => v,
+                _ => {
+                    eprintln!("anterm-server: invalid --ttl value '{raw}'");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => anterm_gateway::DEFAULT_PAIRING_TTL_SECS,
+        };
+        let lan_only = args.iter().any(|a| a == "--lan-only");
+        let relay_url = flag_value(args, "--relay");
+        let opts = anterm_gateway::cli::PairCliOptions {
+            role,
+            ttl_secs,
+            lan_only,
+            relay_url,
+        };
+        if let Err(err) = anterm_gateway::cli::run_pair_cli(opts) {
+            eprintln!("anterm-server: mobile pairing failed: {err}");
+            return ExitCode::FAILURE;
+        }
+        ExitCode::SUCCESS
+    }
+    #[cfg(not(feature = "gateway"))]
+    {
+        let _ = args;
+        eprintln!(
+            "anterm-server: mobile pairing requires building with `--features gateway`"
+        );
+        ExitCode::FAILURE
+    }
+}
+
+fn run_gateway(args: &[String]) -> ExitCode {
+    #[cfg(feature = "gateway")]
+    {
+        let lan_only = args.iter().any(|a| a == "--lan-only");
+        let relay_url = flag_value(args, "--relay");
+        if let Err(err) = anterm_gateway::cli::run_gateway_cli(lan_only, relay_url) {
+            eprintln!("anterm-server: mobile gateway exited with error: {err}");
+            return ExitCode::FAILURE;
+        }
+        ExitCode::SUCCESS
+    }
+    #[cfg(not(feature = "gateway"))]
+    {
+        let _ = args;
+        eprintln!(
+            "anterm-server: --gateway requires building with `--features gateway`"
+        );
+        ExitCode::FAILURE
+    }
 }
 
 fn run_daemon() -> ExitCode {

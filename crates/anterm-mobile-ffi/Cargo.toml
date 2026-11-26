@@ -1,0 +1,53 @@
+[package]
+name = "anterm-mobile-ffi"
+version.workspace = true
+edition.workspace = true
+description = "UniFFI bridge exposing anterm's shared Rust headless terminal, agent transcript, composer, and iroh QUIC gateway to iOS (Swift/Metal) and Android"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "anterm_mobile_ffi"
+crate-type = ["rlib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi_bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+default = []
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+anterm-protocol = { path = "../anterm-protocol" }
+anterm-core = { path = "../anterm-core", default-features = false }
+anterm-client-core = { path = "../anterm-client-core" }
+anterm-gateway = { path = "../anterm-gateway", default-features = false }
+anterm-editor = { path = "../anterm-editor" }
+anterm-i18n = { path = "../anterm-i18n" }
+
+anyhow.workspace = true
+iroh = "1.5"
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+] }
+uniffi = { version = "0.33", features = ["tokio"] }
+
+[dev-dependencies]
+anterm-core = { path = "../anterm-core", features = ["local-daemon", "test-support"] }
+anterm-gateway = { path = "../anterm-gateway", features = ["host"] }
+tempfile = "3"
+
+[lints]
+workspace = true

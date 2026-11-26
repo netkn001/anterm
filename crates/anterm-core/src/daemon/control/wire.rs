@@ -48,6 +48,14 @@ pub enum ControlRequest {
     WriteFile {
         path: String,
     },
+    /// Upload a mobile attachment (photo, screenshot, snippet) into a private
+    /// host temp directory and return its host-side path for agent composers.
+    /// Gated on [`crate::daemon::protocol::FEATURE_GATEWAY_UPLOAD`].
+    UploadTempFile {
+        filename: String,
+        #[serde(default)]
+        mime: String,
+    },
     CreateFileNew {
         path: String,
     },
@@ -279,7 +287,7 @@ impl ControlRequest {
             // between asks would only stack up requests behind a peer that has
             // stopped answering.
             | PaneProcs { .. } => Duration::from_secs(5),
-            ReadFile { .. } | WriteFile { .. } => Duration::from_secs(30),
+            ReadFile { .. } | WriteFile { .. } | UploadTempFile { .. } => Duration::from_secs(30),
             CreateFileNew { .. } | CreateDir { .. } | Rename { .. } | Remove { .. } => {
                 Duration::from_secs(10)
             }
@@ -310,7 +318,10 @@ impl ControlRequest {
     }
 
     pub fn takes_blob(&self) -> bool {
-        matches!(self, ControlRequest::WriteFile { .. })
+        matches!(
+            self,
+            ControlRequest::WriteFile { .. } | ControlRequest::UploadTempFile { .. }
+        )
     }
 
     pub fn returns_blob(&self) -> bool {

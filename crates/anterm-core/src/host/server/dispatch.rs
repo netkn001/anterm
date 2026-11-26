@@ -162,6 +162,13 @@ fn run_request(
         ControlRequest::WriteFile { path } => {
             (ReplyOk::Meta(h.write_file(&p(&path), &blob)?), Vec::new())
         }
+        ControlRequest::UploadTempFile { filename, mime: _ } => {
+            let saved = save_mobile_temp_upload(&filename, &blob)?;
+            (
+                ReplyOk::Path(saved.to_string_lossy().into_owned()),
+                Vec::new(),
+            )
+        }
         ControlRequest::CreateFileNew { path } => {
             h.create_file_new(&p(&path))?;
             (ReplyOk::Unit, Vec::new())
@@ -410,4 +417,59 @@ fn paths(v: &[String]) -> Vec<PathBuf> {
 
 fn clamp_usize(v: u64) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
+}
+
+fn save_mobile_temp_upload(filename: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    if bytes.len() > anterm_protocol::gateway::MAX_MOBILE_UPLOAD_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!(
+                "attachment exceeds {} byte limit",
+                anterm_protocol::gateway::MAX_MOBILE_UPLOAD_BYTES
+            ),
+        ));
+    }
+    let dir = std::env::temp_dir().join("anterm-mobile-uploads");
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    // Sweep uploads older than 24 hours so temp attachments never accumulate.
+    let now = std::time::SystemTime::now();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && now
+                    .duration_since(modified)
+                    .is_ok_and(|age| age > std::time::Duration::from_secs(24 * 60 * 60))
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let safe_name: String = PathBuf::from(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment.bin")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
+    let safe_name = if safe_name.is_empty() || safe_name.starts_with('.') {
+        format!("attachment_{safe_name}")
+    } else {
+        safe_name
+    };
+    let dest = dir.join(format!("{}-{safe_name}", uuid::Uuid::new_v4()));
+    anterm_protocol::util::write_atomic_private(&dest, bytes)?;
+    Ok(dest)
 }

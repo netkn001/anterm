@@ -24,7 +24,7 @@ fn the_catalog_has_unique_titles_and_default_values_are_unmodified() {
         );
         assert!(SettingsSection::ALL.contains(&entry.section));
     }
-    assert_eq!(SettingsSection::ALL.len(), 7);
+    assert_eq!(SettingsSection::ALL.len(), 8);
     assert!(!SettingsSection::ALL.contains(&SettingsSection::Keybindings));
 }
 

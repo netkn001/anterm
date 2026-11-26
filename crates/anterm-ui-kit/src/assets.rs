@@ -100,6 +100,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/settings/machine-remote.svg" => {
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/settings/machine-remote.svg"))
         }
+        "icons/settings/mobile.svg" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/settings/mobile.svg")),
         "icons/settings/more.svg" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/settings/more.svg")),
         "icons/settings/plus.svg" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/settings/plus.svg")),
         "icons/settings/search.svg" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/settings/search.svg")),

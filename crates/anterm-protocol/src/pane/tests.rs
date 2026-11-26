@@ -123,6 +123,16 @@ fn client_roundtrip() {
             pane_id: 42,
             size: SIZE,
         },
+        ClientMsg::ObserveSince {
+            pane_id: 42,
+            size: SIZE,
+            since_offset: Some(1024),
+        },
+        ClientMsg::ObserveSince {
+            pane_id: 42,
+            size: SIZE,
+            since_offset: None,
+        },
         ClientMsg::Attach {
             pane_id: 42,
             size: SIZE,
@@ -268,6 +278,14 @@ fn daemon_roundtrip() {
         DaemonMsg::Spawned { pane_id: 1 },
         DaemonMsg::Lease(Some("Thomas's iPhone".into())),
         DaemonMsg::Lease(None),
+        DaemonMsg::ReplayCursor {
+            offset: 4096,
+            mode: ReplayMode::Delta,
+        },
+        DaemonMsg::ReplayCursor {
+            offset: 0,
+            mode: ReplayMode::Full,
+        },
         DaemonMsg::Size(SIZE),
         DaemonMsg::Snapshot(vec![1, 2, 3, 0, 255]),
         DaemonMsg::Output((0u8..=255).collect()),
@@ -327,6 +345,7 @@ fn daemon_roundtrip() {
             inferred: false,
             readout: Default::default(),
             since_ms: Some(1_760_000_000_000),
+            transcript_path: Some("/tmp/claude/sess.jsonl".into()),
         })),
         DaemonMsg::AgentStatus(None),
         DaemonMsg::LoopbackForward(LoopbackForward { local_port: 49152 }),

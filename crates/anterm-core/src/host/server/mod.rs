@@ -228,6 +228,7 @@ fn handshake<R: Read>(
         // request only needs a name so an older client's peer is never sent
         // it (see `RemoteHost::search_content`).
         feature::CONTENT_SEARCH.to_string(),
+        crate::daemon::protocol::FEATURE_GATEWAY_UPLOAD.to_string(),
     ];
     // Only where there are panes to ask about. A control peer serving no panes
     // would answer every ask with an empty list, which reads to a client as

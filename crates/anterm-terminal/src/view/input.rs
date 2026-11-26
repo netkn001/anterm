@@ -1147,6 +1147,12 @@ impl TerminalView {
         if self.terminal.exited || !self.accepts_input(cx) {
             return;
         }
+        // When a mobile device explicitly holds a SizeLease on this pane and
+        // the user starts typing directly at the desktop keyboard, reclaim the
+        // lease automatically so control returns effortlessly to the PC.
+        if !bytes.is_empty() && self.terminal.leased_by().is_some() {
+            self.terminal.take_back();
+        }
         self.terminal.write(bytes.to_vec());
         self.render.cursor_visible = true;
         self.jump_to_prompt();

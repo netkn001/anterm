@@ -52,7 +52,9 @@ use state::{
     TerminalRenderState, TerminalSearchState, TerminalSessionState,
 };
 
-pub(super) use clipboard::{clipboard_has_paths, pasted_paths_text, types_cleanly};
+pub(super) use clipboard::clipboard_has_paths;
+#[cfg(test)]
+pub(super) use clipboard::pasted_paths_text;
 pub(super) use input::should_show_context_menu;
 #[cfg(test)]
 pub use links::PortRoute;

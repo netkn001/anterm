@@ -12,6 +12,7 @@ default = []
 test-support = []
 
 [dependencies]
+anterm-client-core = { path = "../anterm-client-core" }
 anterm-core = { path = "../anterm-core", features = ["gssapi", "remote-install", "history-db"] }
 anterm-editor = { path = "../anterm-editor" }
 anterm-i18n = { path = "../anterm-i18n" }

@@ -48,8 +48,8 @@ pub(crate) use spawn_env::ANTERM_PANE_ENV;
 use adopt::{AdoptedChild, AdoptedMaster};
 use fanout::{
     Observer, SizeLease, attach_subscriber_with_permissions, controller_resize, fan_out_output,
-    lease_end, lease_release, lease_take, notify, observe_subscriber, set_clipboard_permission,
-    tell_controller_lease,
+    lease_end, lease_release, lease_take, notify, observe_subscriber, observe_subscriber_since,
+    set_clipboard_permission, tell_controller_lease,
 };
 use restore::{
     REDRAW_NUDGE_SETTLE, answer_queries, detached_queries, record_output, redraw_nudge,
@@ -1260,6 +1260,40 @@ impl DaemonPane {
             self.runs_foreground_program(foreground_command),
             std::time::Instant::now(),
         );
+        drop(st);
+        if let Some(transient) = nudge {
+            self.nudge_redraw(transient);
+        }
+        id
+    }
+
+    pub fn observe_since(
+        &self,
+        observer: Sender<DaemonMsg>,
+        gate: Arc<OutputGate>,
+        since_offset: Option<u64>,
+    ) -> u64 {
+        let foreground_command = self.has_foreground_command();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let did_delta = since_offset.is_some_and(|off| st.ring.can_replay_since(off));
+        let id = observe_subscriber_since(
+            &mut st,
+            observer,
+            gate,
+            foreground_command,
+            since_offset,
+        );
+        // Only nudge on a full replay; a delta-resumed observer already has the
+        // pre-disconnect alternate screen in its local emulator.
+        let nudge = if did_delta {
+            None
+        } else {
+            redraw_nudge(
+                &mut st,
+                self.runs_foreground_program(foreground_command),
+                std::time::Instant::now(),
+            )
+        };
         drop(st);
         if let Some(transient) = nudge {
             self.nudge_redraw(transient);

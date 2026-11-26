@@ -2047,6 +2047,7 @@ fn hook_events_restart_the_agent_clock() {
             cwd: None,
             source: None,
             readout: Default::default(),
+            transcript_path: None,
         }],
         None,
     );
@@ -2066,6 +2067,7 @@ fn a_status_that_leaves_and_returns_in_one_batch_is_restamped() {
         cwd: None,
         source: None,
         readout: Default::default(),
+        transcript_path: None,
     };
     let mut st = test_state(true);
     st.agent_session = Some(AgentSessionState {
@@ -2477,6 +2479,7 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
         inferred: false,
         readout: Default::default(),
         since_ms: None,
+        transcript_path: None,
     });
     apply_signals(&mut st, sniffer.feed(b"\x1b]9;noise\x07"));
     assert_eq!(
@@ -4862,5 +4865,92 @@ fn a_one_row_pane_is_nudged_a_row_taller() {
     assert_eq!(
         redraw_nudge(&mut st, true, std::time::Instant::now()),
         Some(ws(80, 2))
+    );
+}
+
+#[test]
+fn observe_since_replays_delta_when_in_window_and_falls_back_when_evicted() {
+    use crate::daemon::protocol::ReplayMode;
+
+    let mut st = test_state(true);
+    record_output(&mut st, b"hello ");
+    let mid = st.ring.appended;
+    record_output(&mut st, b"world!");
+    let tip = st.ring.appended;
+
+    // 1. Fresh observer (`None`) gets Full replay + cursor at tip.
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_since(&mut st, tx, Arc::new(OutputGate::new()), false, None);
+    let msgs: Vec<DaemonMsg> = rx.try_iter().collect();
+    assert_eq!(
+        msgs.first(),
+        Some(&DaemonMsg::ReplayCursor {
+            offset: tip,
+            mode: ReplayMode::Full,
+        })
+    );
+    let full_bytes: Vec<u8> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            DaemonMsg::Snapshot(b) => Some(b.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    assert_eq!(full_bytes, b"hello world!");
+
+    // 2. Resuming from `mid` sends only the delta tail "world!".
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_since(&mut st, tx, Arc::new(OutputGate::new()), false, Some(mid));
+    let msgs: Vec<DaemonMsg> = rx.try_iter().collect();
+    assert_eq!(
+        msgs.first(),
+        Some(&DaemonMsg::ReplayCursor {
+            offset: tip,
+            mode: ReplayMode::Delta,
+        })
+    );
+    let delta_bytes: Vec<u8> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            DaemonMsg::Snapshot(b) => Some(b.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    assert_eq!(delta_bytes, b"world!");
+
+    // 3. Resuming from `tip` (no new bytes) sends Delta cursor + zero snapshot bytes.
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_since(&mut st, tx, Arc::new(OutputGate::new()), false, Some(tip));
+    let msgs: Vec<DaemonMsg> = rx.try_iter().collect();
+    assert_eq!(
+        msgs.first(),
+        Some(&DaemonMsg::ReplayCursor {
+            offset: tip,
+            mode: ReplayMode::Delta,
+        })
+    );
+    assert!(
+        !msgs.iter().any(|m| matches!(m, DaemonMsg::Snapshot(_))),
+        "no snapshot bytes owed when already at tip"
+    );
+
+    // 4. Evict past `mid` by writing more than RING_CAP; resuming from `mid`
+    //    must cleanly fall back to ReplayMode::Full.
+    let big = vec![b'x'; super::ring::RING_CAP + 64];
+    record_output(&mut st, &big);
+    let after_evict = st.ring.appended;
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_since(&mut st, tx, Arc::new(OutputGate::new()), false, Some(mid));
+    let msgs: Vec<DaemonMsg> = rx.try_iter().collect();
+    assert_eq!(
+        msgs.first(),
+        Some(&DaemonMsg::ReplayCursor {
+            offset: after_evict,
+            mode: ReplayMode::Full,
+        })
     );
 }

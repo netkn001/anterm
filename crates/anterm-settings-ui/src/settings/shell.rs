@@ -781,6 +781,7 @@ impl SettingsWindow {
                 SettingsSection::KeyboardMouse => self.render_settings_input(cx),
                 SettingsSection::Ssh => self.render_settings_ssh(cx),
                 SettingsSection::Agents => self.render_settings_agents(cx),
+                SettingsSection::Mobile => self.render_settings_mobile(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
                 SettingsSection::About => self.render_settings_about(cx),
             };
@@ -1328,6 +1329,9 @@ impl SettingsWindow {
                     self.render_ssh_connection_rows(cx);
                 }
                 SettingsSection::Agents => {}
+                SettingsSection::Mobile => {
+                    self.render_settings_mobile(cx);
+                }
                 SettingsSection::About => {
                     self.render_settings_about(cx);
                 }

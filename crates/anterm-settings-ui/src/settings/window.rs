@@ -117,6 +117,10 @@ impl SettingsWindow {
             Self::build_shell_inputs(&mut subs, window, cx);
         let link_file_command_input = Self::build_link_file_command_input(&mut subs, window, cx);
         let http_proxy_input = Self::build_http_proxy_input(&mut subs, window, cx);
+        let mobile_store = Self::init_mobile_store();
+        let mobile_relay_input =
+            Self::build_mobile_relay_input(mobile_store.as_ref(), &mut subs, window, cx);
+        let mobile_rename_input = Self::build_mobile_rename_input(&mut subs, window, cx);
 
         let menu_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SearchTheme)));
@@ -233,6 +237,13 @@ impl SettingsWindow {
             agent_show_all: false,
             agent_touched: HashSet::new(),
             agent_busy: HashSet::new(),
+            mobile_store,
+            mobile_relay_input,
+            mobile_pair_role: anterm_gateway::MobileRole::Interactive,
+            mobile_pairing_qr: None,
+            mobile_status_note: None,
+            mobile_rename_target: None,
+            mobile_rename_input,
             _subs: subs,
         };
 

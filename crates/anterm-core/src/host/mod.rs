@@ -1,7 +1,8 @@
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "local-daemon"))]
 #[allow(clippy::unwrap_used)]
 pub mod conformance;
 pub mod content_search;
+#[cfg(feature = "local-daemon")]
 pub mod local;
 pub mod remote;
 pub mod server;
@@ -385,6 +386,7 @@ pub trait Host: Send + Sync + 'static {
 ///
 /// `IN_CLOSE_WRITE` also arrives as `Access`, and that one is a real write
 /// finishing, so it stays. Everything else under `Access` is a reader.
+#[cfg(feature = "local-daemon")]
 pub fn is_content_change(kind: &notify::EventKind) -> bool {
     use notify::event::{AccessKind, AccessMode};
 

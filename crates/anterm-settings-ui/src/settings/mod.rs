@@ -33,6 +33,7 @@ mod editor;
 mod forms;
 mod hosts;
 pub use anterm_ui_kit::kit;
+mod mobile;
 mod pages;
 mod shell;
 pub use shell::segmented_control;
@@ -327,6 +328,13 @@ pub struct SettingsState {
     pub agent_touched: std::collections::HashSet<anterm_core::agent_hooks::HookAgent>,
     /// Agents with an install or removal in flight.
     pub agent_busy: std::collections::HashSet<anterm_core::agent_hooks::HookAgent>,
+    pub mobile_store: Option<anterm_gateway::GatewayStore>,
+    pub mobile_relay_input: Entity<InputState>,
+    pub mobile_pair_role: anterm_gateway::MobileRole,
+    pub mobile_pairing_qr: Option<(String, usize, Vec<bool>)>,
+    pub mobile_status_note: Option<String>,
+    pub mobile_rename_target: Option<String>,
+    pub mobile_rename_input: Entity<InputState>,
     pub _subs: Vec<Subscription>,
 }
 

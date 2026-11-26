@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::term_modes::Query;
-use crate::daemon::protocol::{DaemonMsg, WinSize};
+use crate::daemon::protocol::{DaemonMsg, ReplayMode, WinSize};
 
 use super::PaneState;
 use super::fanout::gated_len;
@@ -243,6 +243,59 @@ pub(super) fn replay_state(st: &PaneState, subscriber: &Sender<DaemonMsg>, foreg
         send(DaemonMsg::Snapshot(modes));
     }
     st.ring.replay(&mut send);
+    send_replayed_metadata(st, foreground_command, &mut send);
+    queued
+}
+
+/// Like [`replay_state`], but starts with a [`DaemonMsg::ReplayCursor`] frame
+/// and emits only the bytes appended after `since_offset` when still in the
+/// ring, falling back to a full replay (`ReplayMode::Full`) otherwise.
+pub(super) fn replay_state_since(
+    st: &PaneState,
+    subscriber: &Sender<DaemonMsg>,
+    foreground_command: bool,
+    since_offset: Option<u64>,
+) -> usize {
+    let mut queued = 0;
+    let mut send = |msg: DaemonMsg| {
+        let len = gated_len(&msg);
+        if subscriber.send(msg).is_ok() {
+            queued += len;
+        }
+    };
+    let cursor = st.ring.appended;
+    if let Some(since) = since_offset
+        && st.ring.can_replay_since(since)
+    {
+        send(DaemonMsg::ReplayCursor {
+            offset: cursor,
+            mode: ReplayMode::Delta,
+        });
+        st.ring.replay_since(since, &mut send);
+        send_replayed_metadata(st, foreground_command, &mut send);
+        return queued;
+    }
+
+    send(DaemonMsg::ReplayCursor {
+        offset: cursor,
+        mode: ReplayMode::Full,
+    });
+    if let Some(modes) = st
+        .modes
+        .replay_prelude(&st.ring.head_modes, &st.ring.modes())
+    {
+        send(DaemonMsg::Snapshot(modes));
+    }
+    st.ring.replay(&mut send);
+    send_replayed_metadata(st, foreground_command, &mut send);
+    queued
+}
+
+fn send_replayed_metadata(
+    st: &PaneState,
+    foreground_command: bool,
+    send: &mut impl FnMut(DaemonMsg),
+) {
     if st.shell.active {
         send(DaemonMsg::Prompt {
             active: st.shell.active,
@@ -278,7 +331,6 @@ pub(super) fn replay_state(st: &PaneState, subscriber: &Sender<DaemonMsg>, foreg
     if !st.alive {
         send(DaemonMsg::Exited { code: st.exit_code });
     }
-    queued
 }
 
 /// Whether a replay may tell the client the pane is sitting at a shell prompt.

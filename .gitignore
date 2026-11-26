@@ -37,3 +37,9 @@ repomix-output.*
 
 # Scratch design mockups (HTML previews made while designing, not shipped)
 /design/
+
+# Generated iOS build artifacts (recreated by mobile/ios/scripts/build-rust-xcframework.sh)
+/mobile/ios/Anterm.xcodeproj/
+/mobile/ios/Anterm/Generated/
+/mobile/ios/Frameworks/
+/mobile/ios/build/

@@ -1,4 +1,5 @@
 mod probe;
+#[cfg_attr(not(feature = "local-daemon"), allow(dead_code))]
 mod process;
 #[cfg(test)]
 mod tests;

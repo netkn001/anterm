@@ -22,11 +22,14 @@ resolver = "3"
 members = ["crates/*"]
 default-members = [
     "crates/anterm-app",
+    "crates/anterm-client-core",
     "crates/anterm-core",
     "crates/anterm-editor",
     "crates/anterm-editor-ui",
     "crates/anterm-files-ui",
+    "crates/anterm-gateway",
     "crates/anterm-i18n",
+    "crates/anterm-mobile-ffi",
     "crates/anterm-protocol",
     "crates/anterm-remote-ui",
     "crates/anterm-server",

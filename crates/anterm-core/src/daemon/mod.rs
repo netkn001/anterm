@@ -5,22 +5,26 @@ pub mod duplex;
 /// Unix only, and not for want of trying: `execve` is what makes it possible,
 /// and Windows has neither that nor a way to hand a ConPTY to another process.
 /// There the daemon still stops and starts, and `scrollback` softens it.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "local-daemon"))]
 pub mod handoff;
 pub mod history;
 pub mod install;
+#[cfg(feature = "local-daemon")]
 pub mod pane;
 pub mod pidfile;
 pub mod procinfo;
 pub mod procstat;
 pub use anterm_protocol::pane as protocol;
+#[cfg_attr(not(feature = "local-daemon"), allow(dead_code))]
 pub(crate) mod remote;
 pub mod remote_link;
 /// Disclaiming the launcher's privacy attribution at startup (#909).
 #[cfg(target_os = "macos")]
 pub mod responsibility;
 pub mod router;
+#[cfg(feature = "local-daemon")]
 pub mod scrollback;
+#[cfg(feature = "local-daemon")]
 pub mod server;
 pub mod singleton;
 pub mod spawn;

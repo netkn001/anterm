@@ -11,12 +11,19 @@ publish = false
 name = "anterm-server"
 path = "src/main.rs"
 
-# One dependency, on purpose. This binary exists to prove — and keep proving —
-# that everything a anterm session needs runs without gpui: if it ever grows a
-# second dependency that the GUI also needs, that dependency belongs in
-# `anterm-core` instead.
+[features]
+default = []
+# Optional mobile E2EE iroh QUIC gateway (`anterm-server pair` / `--gateway`).
+# Left off by default so remote SSH `anterm-server` builds stay minimal.
+gateway = ["dep:anterm-gateway"]
+
+# One dependency by default, on purpose. This binary exists to prove — and keep
+# proving — that everything a anterm session needs runs without gpui: if it ever
+# grows a second default dependency that the GUI also needs, that dependency
+# belongs in `anterm-core` instead.
 [dependencies]
 anterm-core = { path = "../anterm-core" }
+anterm-gateway = { path = "../anterm-gateway", optional = true }
 
 # The end-to-end proof (`tests/stdio_conformance.rs`) runs `anterm-core`'s shared
 # `Host` conformance suite against a *real* `anterm-server --stdio` child process.

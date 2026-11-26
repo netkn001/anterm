@@ -83,7 +83,7 @@ smallvec.workspace = true
 # behind one blocking `Read`/`Write`/`resize` API. This is what lets
 # `daemon::pane` share a single code path across platforms instead of
 # hand-rolling fd/ioctl/signal code.
-portable-pty = "0.8"
+portable-pty = { version = "0.8", optional = true }
 
 # Native (pure-Rust) SSH client for the daemon's russh session engine
 # (`daemon::ssh`) — see the root manifest's note for why we own this stack
@@ -127,7 +127,7 @@ tokio = { version = "1", features = [
 # watcher per expanded directory, coalesced into 100ms batches. Same crate and
 # version the GUI already used for the file tree, so the server watches a remote
 # tree exactly the way the client watched a local one.
-notify = "8"
+notify = { version = "8", optional = true }
 
 # `smol::channel` carries watch batches out of the coalescing thread. Only the
 # channel is used — the executor stays in the GUI — but taking it from `smol`
@@ -231,7 +231,11 @@ tokio = { version = "1", features = ["test-util", "macros", "rt"] }
 # from the GUI package, so a feature-gated test looks green there and silently
 # vanishes the moment anyone narrows to `-p anterm-core`.
 [features]
-default = []
+default = ["local-daemon"]
+# Local PTY daemon, filesystem watcher, and host pane server. Disabled on mobile
+# targets (iOS/Android) where `anterm-core` runs in client/SSH mode without
+# spawning local PTYs (`portable-pty` depends on `termios`/`ioctl-rs`).
+local-daemon = ["dep:portable-pty", "dep:notify"]
 # Exposes the shared `host::conformance` test suite for external integration tests
 # (such as `anterm-server/tests/stdio_conformance.rs`) without compiling it into
 # release binaries.

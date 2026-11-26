@@ -296,6 +296,7 @@ fn every_reply() -> Vec<ControlReply> {
                 inferred: false,
                 readout: Default::default(),
                 since_ms: None,
+                transcript_path: None,
             },
         }])),
         ControlReply::Ok(ReplyOk::AgentStates(Vec::new())),

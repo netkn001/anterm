@@ -151,6 +151,7 @@ fn an_agent_that_has_finished_its_turn_is_not_busy(cx: &mut TestAppContext) {
             inferred: false,
             readout: Default::default(),
             since_ms: None,
+            transcript_path: None,
         }))
         .encode(daemon)
         .unwrap();
@@ -210,6 +211,7 @@ fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
         inferred: false,
         readout: Default::default(),
         since_ms: None,
+        transcript_path: None,
     }))
     .encode(&mut daemon)
     .unwrap();
@@ -280,6 +282,7 @@ fn report_agent_turn(
         inferred: false,
         readout: Default::default(),
         since_ms: None,
+        transcript_path: None,
     };
     DaemonMsg::AgentStatus(Some(state.clone()))
         .encode(daemon)
@@ -740,6 +743,7 @@ fn a_pane_follows_its_agent_into_a_worktree(cx: &mut TestAppContext) {
         inferred: false,
         readout: Default::default(),
         since_ms: None,
+        transcript_path: None,
     }))
     .encode(&mut daemon)
     .unwrap();

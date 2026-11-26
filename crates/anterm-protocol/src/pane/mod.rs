@@ -72,6 +72,29 @@ pub const FEATURE_SIZE_LEASE: &str = "size-lease";
 /// in-memory replay ring and removes its persisted scrollback snapshot on disk.
 pub const FEATURE_CLEAR_SCROLLBACK: &str = "clear-scrollback";
 
+/// The daemon understands [`ClientMsg::ObserveSince`] and emits
+/// [`DaemonMsg::ReplayCursor`] ahead of delta or full replay so mobile clients
+/// resume across lock/network handoffs without re-downloading the whole ring.
+pub const FEATURE_DELTA_REPLAY: &str = "delta-replay";
+
+/// The daemon records `transcript_path` on agent sessions and can stream
+/// structured [`crate::transcript::TranscriptBatch`] updates without touching
+/// the pane's PTY size.
+pub const FEATURE_AGENT_TRANSCRIPT: &str = "agent-transcript";
+
+/// The control server supports `UploadTempFile` for mobile photo/file composer
+/// attachments.
+pub const FEATURE_GATEWAY_UPLOAD: &str = "gateway-upload";
+
+/// Whether a [`ClientMsg::ObserveSince`] replay carries only new delta bytes or
+/// fell back to a complete ring snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayMode {
+    Delta,
+    Full,
+}
+
 /// What a [`ClientMsg::Lease`] asks. The first two are an observer's, the last
 /// two the controller's; each side's are ignored from the other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +132,8 @@ impl DaemonVersion {
             FEATURE_UPDATE_SERVER.to_string(),
             FEATURE_SIZE_LEASE.to_string(),
             FEATURE_CLEAR_SCROLLBACK.to_string(),
+            FEATURE_DELTA_REPLAY.to_string(),
+            FEATURE_AGENT_TRANSCRIPT.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -217,6 +242,15 @@ pub enum ClientMsg {
     Observe {
         pane_id: u64,
         size: WinSize,
+    },
+    /// Like [`ClientMsg::Observe`], but resumes from `since_offset` in the
+    /// daemon's replay ring when still available, avoiding full 8 MiB re-sync
+    /// on mobile wake or network switch. Only sent after the daemon advertises
+    /// [`FEATURE_DELTA_REPLAY`].
+    ObserveSince {
+        pane_id: u64,
+        size: WinSize,
+        since_offset: Option<u64>,
     },
     Input(Vec<u8>),
     SendInput {
@@ -381,5 +415,13 @@ pub enum DaemonMsg {
     /// [`LeaseRequest::Watch`], never to anyone else: older clients cannot
     /// decode it.
     Lease(Option<String>),
+    /// Sent ahead of a [`ClientMsg::ObserveSince`] replay, telling the client
+    /// the monotonic ring byte offset (`offset`) covered by the replay and
+    /// whether it is an incremental [`ReplayMode::Delta`] or a [`ReplayMode::Full`]
+    /// reset.
+    ReplayCursor {
+        offset: u64,
+        mode: ReplayMode,
+    },
     Error(String),
 }

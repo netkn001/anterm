@@ -375,6 +375,51 @@ impl ReplayRing {
         }
     }
 
+    /// Whether `since_offset` still lies within the bytes retained by this ring
+    /// (inclusive of the live tip `self.appended`), so a client that already
+    /// consumed up to `since_offset` can catch up incrementally.
+    pub(super) fn can_replay_since(&self, since_offset: u64) -> bool {
+        let floor = self.appended.saturating_sub(self.len as u64);
+        since_offset >= floor && since_offset <= self.appended
+    }
+
+    /// Emit only the bytes appended after `since_offset`. Caller must check
+    /// [`Self::can_replay_since`] first; returns `false` if out of window.
+    pub(super) fn replay_since(
+        &self,
+        since_offset: u64,
+        send: &mut impl FnMut(DaemonMsg),
+    ) -> bool {
+        if !self.can_replay_since(since_offset) {
+            return false;
+        }
+        let floor = self.appended.saturating_sub(self.len as u64);
+        let mut skip = (since_offset - floor) as usize;
+        if since_offset == self.appended {
+            send(DaemonMsg::Size(self.size()));
+            return true;
+        }
+        for seg in &self.segments {
+            let seg_len = seg.bytes.len();
+            if skip >= seg_len {
+                skip -= seg_len;
+                continue;
+            }
+            let (a, b) = seg.bytes.as_slices();
+            let mut slice = Vec::with_capacity(seg_len - skip);
+            if skip < a.len() {
+                slice.extend_from_slice(&a[skip..]);
+                slice.extend_from_slice(b);
+            } else {
+                slice.extend_from_slice(&b[skip - a.len()..]);
+            }
+            skip = 0;
+            send(DaemonMsg::Size(seg.size));
+            send(DaemonMsg::Snapshot(slice));
+        }
+        true
+    }
+
     /// The modes a replay of this ring switches on by itself — the same fold
     /// the pane keeps, over the bytes that are actually left.
     ///

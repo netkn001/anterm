@@ -1,8 +1,10 @@
 //! Framework-free core for `anterm`: session daemon, PTY, native SSH engine,
 //! remote host abstraction, git probes, config, and workspace state machine.
 
+#[cfg(feature = "local-daemon")]
 pub mod agent_hooks;
 pub mod agent_prompt;
+pub mod agent_transcript;
 pub mod client;
 pub mod clipboard;
 pub mod codename;
@@ -32,4 +34,4 @@ pub mod window_state;
 pub mod worktree;
 
 // Leaf protocol and shared domain modules re-exported from `anterm-protocol`.
-pub use anterm_protocol::{cli_agent, keychain, shell_quote, ssh_profile, tag, util};
+pub use anterm_protocol::{cli_agent, gateway, keychain, shell_quote, ssh_profile, tag, transcript, util};
