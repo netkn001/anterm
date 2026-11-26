@@ -2,6 +2,7 @@
 //! `anterm-app` (desktop GUI) and syncing live state with **Settings → Mobile**.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+#[cfg(target_os = "macos")]
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
